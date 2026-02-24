@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Buttons */
+.btn { @apply px-4 py-2 rounded-md bg-primary text-white hover:opacity-90 transition font-medium; }
+.btn-outline { @apply px-4 py-2 rounded-md border border-neutral-700 text-white bg-neutral-900 hover:bg-neutral-800 transition; }
+.btn-ghost { @apply px-3 py-2 rounded-md text-neutral-300 hover:text-white hover:bg-neutral-800 transition; }
+
+/* Cards / Glass */
+.card { @apply bg-neutral-900/70 border border-neutral-800 backdrop-blur rounded-lg p-4; }
+.panel-glass { @apply bg-neutral-900/60 border border-neutral-800 backdrop-blur-md rounded-xl; }
+
+/* Inputs */
+.label { @apply text-sm text-neutral-300; }
+.input { @apply bg-neutral-800 border border-neutral-700 rounded px-3 py-2 text-white w-full focus:outline-none focus:ring-1 focus:ring-primary; }
+
+/* Hero */
+.hero { @apply bg-f1-hero; }
+.title { @apply font-display; }

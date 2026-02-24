@@ -1,0 +1,7 @@
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "frontend/dist"
+
+[build.environment]
+  VITE_API_BASE = "https://YOUR-RENDER-API.onrender.com"

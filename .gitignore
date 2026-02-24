@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+fastf1_cache/
+models/*.joblib
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Env / local
+.env
+frontend/.env*
+.vscode/
+.DS_Store
