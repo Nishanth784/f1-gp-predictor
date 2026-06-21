@@ -108,7 +108,7 @@ async def health() -> Dict[str, str]:
 
 @app.get("/years")
 async def years() -> Dict[str, List[int]]:
-	return {"years": list(range(2018, 2026))}
+	return {"years": list(range(2018, 2027))}
 
 
 @app.get("/schedule")

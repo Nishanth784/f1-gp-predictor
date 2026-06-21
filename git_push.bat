@@ -7,18 +7,14 @@ echo.
 echo Setting remote URL...
 git remote set-url origin https://github.com/Nishanth784/f1-gp-predictor.git
 echo.
-echo Removing F1-lap-time-prediction submodule from git tracking...
-git rm -r --cached "F1-lap-time-prediction" 2>nul
-if exist ".gitmodules" del /f ".gitmodules"
-echo.
-echo Staging all changes (netlify.toml fix + submodule removal)...
+echo Staging changes...
 git add -A
 echo.
 echo Committing...
-git commit -m "fix: remove F1-lap-time-prediction submodule, fix netlify publish dir"
+git commit -m "feat: add 2026 season support + upgrade fastf1 to 3.8.3"
 echo.
 echo Pushing to GitHub...
 git push origin main
 echo.
-echo === Done - Netlify will redeploy ===
+echo === Done - Render will redeploy ===
 pause
