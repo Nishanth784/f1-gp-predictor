@@ -291,8 +291,12 @@ def extract_practice_features(year: int, gp_name: str) -> pd.DataFrame:
     # All drivers seen across any session
     all_drivers: set = set()
     for s in sessions.values():
-        if hasattr(s, "laps") and s.laps is not None and "Driver" in s.laps.columns:
-            all_drivers.update(s.laps["Driver"].dropna().unique())
+        try:
+            laps = s.laps
+            if laps is not None and "Driver" in laps.columns:
+                all_drivers.update(laps["Driver"].dropna().unique())
+        except Exception:
+            pass
     drivers = sorted(all_drivers)
     print(f"  {len(drivers)} drivers across {len(sessions)} sessions")
 
