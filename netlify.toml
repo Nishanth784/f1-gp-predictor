@@ -4,7 +4,7 @@
   publish = "frontend/dist"
 
 [build.environment]
-  VITE_API_BASE = "https://YOUR-RENDER-API.onrender.com"
+  VITE_API_BASE = "https://f1-gp-predictor.onrender.com"
 
 # SPA fallback — React Router needs this so direct links to /results/... work
 [[redirects]]
