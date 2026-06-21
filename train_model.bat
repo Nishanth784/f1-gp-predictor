@@ -1,12 +1,16 @@
 @echo off
-title F1 Model Training (this will take 30-60 min)
+title F1 Winner Model Training — Extended Features
 cd /d "D:\prediction system"
-echo Training winner model on 2018-2025 F1 data...
-echo Output is ALSO being saved to training_log.txt - window closing won't lose progress.
-echo Do NOT close this window.
+echo ============================================================
+echo  F1 Winner Model Training — Extended Feature Set
+echo  NEW: Chaos index, SC rate, grid spread features included
+echo  Takes 20-40 min. Do NOT close this window.
+echo  Progress also saved to training_log.txt
+echo ============================================================
 echo.
 ".venv\Scripts\python.exe" -u main.py
 echo.
-echo === Process exited with code %ERRORLEVEL% ===
-echo Check training_log.txt in D:\prediction system for full output.
+echo === Done — exit code %ERRORLEVEL% ===
+echo Check training_log.txt for AUC score and comparison.
+echo New model saved to: models\winner_model.joblib
 pause
