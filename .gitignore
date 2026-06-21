@@ -3,7 +3,9 @@
 __pycache__/
 *.pyc
 fastf1_cache/
-models/*.joblib
+# Ignore old lap-time model but COMMIT the winner model for Render deployment
+models/best_model.joblib
+# models/winner_model.joblib  ← intentionally tracked (needed for Render free tier)
 
 # Node
 frontend/node_modules/

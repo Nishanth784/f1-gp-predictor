@@ -2,19 +2,222 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Buttons */
-.btn { @apply px-4 py-2 rounded-md bg-primary text-white hover:opacity-90 transition font-medium; }
-.btn-outline { @apply px-4 py-2 rounded-md border border-neutral-700 text-white bg-neutral-900 hover:bg-neutral-800 transition; }
-.btn-ghost { @apply px-3 py-2 rounded-md text-neutral-300 hover:text-white hover:bg-neutral-800 transition; }
+:root {
+  --bg: #0a0e17;
+  --surface: #0d1220;
+  --panel: #111827;
+  --border: #1e2a3a;
+  --border-bright: #2d3f57;
+  --muted: #3d4f66;
+  --dim: #8899aa;
+  --text: #e8edf5;
+  --f1red: #E8002D;
+  --gold: #FFD700;
+  --silver: #C0C0C0;
+  --bronze: #CD7F32;
+}
 
-/* Cards / Glass */
-.card { @apply bg-neutral-900/70 border border-neutral-800 backdrop-blur rounded-lg p-4; }
-.panel-glass { @apply bg-neutral-900/60 border border-neutral-800 backdrop-blur-md rounded-xl; }
+* { box-sizing: border-box; }
 
-/* Inputs */
-.label { @apply text-sm text-neutral-300; }
-.input { @apply bg-neutral-800 border border-neutral-700 rounded px-3 py-2 text-white w-full focus:outline-none focus:ring-1 focus:ring-primary; }
+html { scroll-behavior: smooth; }
 
-/* Hero */
-.hero { @apply bg-f1-hero; }
-.title { @apply font-display; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', ui-sans-serif, system-ui;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+
+/* ─── Typography ─── */
+.font-display { font-family: 'Barlow Condensed', ui-sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', ui-monospace; }
+
+/* ─── Panel / card base ─── */
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.panel-bright {
+  background: var(--panel);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+}
+
+/* ─── Glow utilities ─── */
+.glow-red  { box-shadow: 0 0 24px rgba(232,0,45,0.25); }
+.glow-gold { box-shadow: 0 0 20px rgba(255,215,0,0.25); }
+.glow-team { box-shadow: 0 0 20px var(--team-color, rgba(255,255,255,0.1)); }
+
+/* ─── Probability bar ─── */
+.prob-bar-track {
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+  height: 6px;
+}
+
+.prob-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  width: 0%;
+  transition: width 1.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ─── Scan-line overlay ─── */
+.scanlines {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 3px,
+    rgba(0,0,0,0.06) 3px,
+    rgba(0,0,0,0.06) 4px
+  );
+}
+
+/* ─── Driver row ─── */
+.driver-row {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.driver-row:hover {
+  background: rgba(255,255,255,0.03);
+  transform: translateX(2px);
+}
+
+/* ─── Podium card ─── */
+.podium-card {
+  border-radius: 10px;
+  border: 1px solid var(--border-bright);
+  background: var(--panel);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.podium-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+}
+
+.podium-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--podium-color, var(--border));
+}
+
+/* ─── Custom select ─── */
+.custom-select {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+}
+
+.custom-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-bright);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.875rem;
+  color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+
+.custom-select-trigger:hover {
+  border-color: var(--dim);
+  background: rgba(255,255,255,0.07);
+}
+
+.custom-select-trigger.open {
+  border-color: var(--f1red);
+  background: rgba(232,0,45,0.06);
+}
+
+.custom-select-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0; right: 0;
+  background: #131c2e;
+  border: 1px solid var(--border-bright);
+  border-radius: 6px;
+  z-index: 100;
+  max-height: 260px;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+}
+
+.custom-select-option {
+  padding: 9px 14px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--dim);
+  transition: background 0.1s, color 0.1s;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.custom-select-option:hover,
+.custom-select-option.selected {
+  background: rgba(232,0,45,0.1);
+  color: var(--text);
+}
+
+.custom-select-option.selected {
+  color: #ff4466;
+}
+
+/* ─── Telemetry label ─── */
+.telem-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* ─── Rank badge ─── */
+.rank-badge {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 1.1rem;
+  min-width: 2rem;
+  text-align: center;
+}
+
+/* ─── Animate in ─── */
+.animate-fadeUp {
+  opacity: 0;
+  animation: fadeUp 0.45s ease-out forwards;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Red accent line ─── */
+.f1-stripe {
+  height: 3px;
+  background: linear-gradient(90deg, var(--f1red) 0%, rgba(232,0,45,0) 100%);
+}

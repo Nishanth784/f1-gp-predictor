@@ -1,34 +1,13 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import { createBrowserRouter, RouterProvider, Outlet } from 'react-router-dom'
+import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import './styles.css'
 import Home from './pages/Home'
-import Predict from './pages/Predict'
-import Compare from './pages/Compare'
-import Winner from './pages/Winner'
-import Navbar from './components/Navbar'
-
-function Shell() {
-	return (
-		<div className="min-h-screen bg-black text-white">
-			<Navbar />
-			<div className="max-w-6xl mx-auto px-4 py-6">
-				<Outlet />
-			</div>
-		</div>
-	)
-}
+import Results from './pages/Results'
 
 const router = createBrowserRouter([
-	{
-		path: '/',
-		element: <Shell />, children: [
-			{ path: '/', element: <Home /> },
-			{ path: '/predict', element: <Predict /> },
-			{ path: '/compare', element: <Compare /> },
-			{ path: '/winner', element: <Winner /> },
-		]
-	}
+	{ path: '/', element: <Home /> },
+	{ path: '/results/:year/:gp', element: <Results /> },
 ])
 
 createRoot(document.getElementById('root')).render(

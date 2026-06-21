@@ -171,35 +171,97 @@ def engineer_winner_features(df: pd.DataFrame, year: int, gp_name: str, include_
 		work["QualiTimeGap"] = 10.0
 	
 	# Historical driver and team stats (if enabled)
+	# Optimized: pre-load each historical GP once, then batch-compute all driver/team stats.
+	# This avoids the original O(drivers × prev_gps) load pattern (was 30× redundant).
 	if include_historical:
-		driver_stats_list = []
-		team_stats_list = []
-		
-		for idx, row in work.iterrows():
-			driver = str(row.get("Driver", ""))
-			team = str(row.get("Team", ""))
-			
-			if driver:
-				driver_stats = calculate_driver_stats(driver, year, gp_name)
-				driver_stats_list.append(driver_stats)
-			else:
-				driver_stats_list.append({"win_rate": 0.0, "avg_position": 20.0, "total_wins": 0, "total_races": 0})
-			
-			if team:
-				team_stats = calculate_team_stats(team, year, gp_name)
-				team_stats_list.append(team_stats)
-			else:
-				team_stats_list.append({"win_rate": 0.0, "avg_position": 20.0, "total_wins": 0, "total_races": 0})
-		
-		driver_df = pd.DataFrame(driver_stats_list, index=work.index)
-		team_df = pd.DataFrame(team_stats_list, index=work.index)
-		
-		work["DriverWinRate"] = driver_df["win_rate"]
-		work["DriverAvgPosition"] = driver_df["avg_position"]
-		work["DriverTotalWins"] = driver_df["total_wins"]
-		work["TeamWinRate"] = team_df["win_rate"]
-		work["TeamAvgPosition"] = team_df["avg_position"]
-		work["TeamTotalWins"] = team_df["total_wins"]
+		# 1. Find all GPs that happened before this one
+		try:
+			schedule = get_event_schedule(year)
+			all_gps = schedule["EventName"].dropna().tolist() if not schedule.empty and "EventName" in schedule.columns else []
+		except Exception:
+			all_gps = []
+
+		if gp_name in all_gps:
+			previous_gps = all_gps[:all_gps.index(gp_name)]
+		else:
+			previous_gps = []
+
+		# 2. Load each previous GP exactly once
+		historical_frames: dict = {}
+		for prev_gp in previous_gps:
+			try:
+				prev_data = get_winner_prediction_data(year, prev_gp)
+				if not prev_data.empty:
+					historical_frames[prev_gp] = prev_data
+			except Exception:
+				continue
+
+		n_prev = len(previous_gps)
+
+		# 3. Batch-compute driver stats
+		unique_drivers = work["Driver"].dropna().unique().tolist() if "Driver" in work.columns else []
+		driver_stats_map: dict = {}
+		for driver in unique_drivers:
+			wins, positions = 0, []
+			for gp_df in historical_frames.values():
+				if "Driver" not in gp_df.columns:
+					continue
+				d_row = gp_df[gp_df["Driver"] == driver]
+				if d_row.empty:
+					continue
+				if "IsWinner" in d_row.columns:
+					wins += int(d_row["IsWinner"].iloc[0])
+				if "Position" in d_row.columns:
+					pos = d_row["Position"].iloc[0]
+					if pd.notna(pos):
+						positions.append(float(pos))
+			driver_stats_map[driver] = {
+				"win_rate": wins / n_prev if n_prev > 0 else 0.0,
+				"avg_position": float(np.mean(positions)) if positions else 20.0,
+				"total_wins": wins,
+				"total_races": n_prev,
+			}
+
+		# 4. Batch-compute team stats
+		unique_teams = work["Team"].dropna().unique().tolist() if "Team" in work.columns else []
+		team_stats_map: dict = {}
+		for team in unique_teams:
+			wins, positions = 0, []
+			for gp_df in historical_frames.values():
+				if "Team" not in gp_df.columns:
+					continue
+				t_rows = gp_df[gp_df["Team"] == team]
+				if t_rows.empty:
+					continue
+				if "IsWinner" in t_rows.columns and t_rows["IsWinner"].sum() > 0:
+					wins += 1
+				if "Position" in t_rows.columns:
+					best_pos = t_rows["Position"].min()
+					if pd.notna(best_pos):
+						positions.append(float(best_pos))
+			team_stats_map[team] = {
+				"win_rate": wins / n_prev if n_prev > 0 else 0.0,
+				"avg_position": float(np.mean(positions)) if positions else 20.0,
+				"total_wins": wins,
+				"total_races": n_prev,
+			}
+
+		# 5. Apply to dataframe
+		_def_d = {"win_rate": 0.0, "avg_position": 20.0, "total_wins": 0}
+		_def_t = {"win_rate": 0.0, "avg_position": 20.0, "total_wins": 0}
+
+		def _dstat(d: str, key: str):
+			return driver_stats_map.get(d, _def_d).get(key, _def_d.get(key, 0))
+
+		def _tstat(t: str, key: str):
+			return team_stats_map.get(t, _def_t).get(key, _def_t.get(key, 0))
+
+		work["DriverWinRate"] = work.get("Driver", pd.Series()).map(lambda d: _dstat(str(d), "win_rate"))
+		work["DriverAvgPosition"] = work.get("Driver", pd.Series()).map(lambda d: _dstat(str(d), "avg_position"))
+		work["DriverTotalWins"] = work.get("Driver", pd.Series()).map(lambda d: _dstat(str(d), "total_wins"))
+		work["TeamWinRate"] = work.get("Team", pd.Series()).map(lambda t: _tstat(str(t), "win_rate"))
+		work["TeamAvgPosition"] = work.get("Team", pd.Series()).map(lambda t: _tstat(str(t), "avg_position"))
+		work["TeamTotalWins"] = work.get("Team", pd.Series()).map(lambda t: _tstat(str(t), "total_wins"))
 	else:
 		work["DriverWinRate"] = 0.0
 		work["DriverAvgPosition"] = 20.0

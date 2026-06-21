@@ -1,89 +1,100 @@
 import os
+import sys
+import traceback
 
-import numpy as np
 import pandas as pd
 
-from data_ingestion import get_session_data, get_event_schedule, get_winner_prediction_data
-from feature_engineering import engineer_features
-from model import train_and_evaluate
-from realtime import live_predict_latest_laps
+from data_ingestion import get_event_schedule, get_winner_prediction_data
 from winner_feature_engineering import engineer_winner_features
 from winner_model import train_and_evaluate_winner_model
 
+LOG_PATH = os.path.join(os.path.dirname(__file__), "training_log.txt")
+
+
+class Tee:
+	"""Write to both stdout and a log file simultaneously."""
+	def __init__(self, file):
+		self.file = file
+		self.stdout = sys.stdout
+
+	def write(self, data):
+		self.stdout.write(data)
+		self.file.write(data)
+		self.file.flush()
+
+	def flush(self):
+		self.stdout.flush()
+		self.file.flush()
+
 
 if __name__ == "__main__":
-	# Demo: Monaco Grand Prix 2023 Qualifying
-	year_example = 2023
-	grand_prix_example = "Monaco"
-	session_example = "Q"
+	with open(LOG_PATH, "w", encoding="utf-8") as log_file:
+		sys.stdout = Tee(log_file)
+		sys.stderr = Tee(log_file)
 
-	print(f"Loading session: {year_example} {grand_prix_example} {session_example}...")
-	df_clean = get_session_data(year_example, grand_prix_example, session_example, include_sprint=True)
-	print("Sample rows:")
-	print(df_clean.head(10))
+		try:
+			years_to_train = list(range(2018, 2026))
 
-	print("\nEngineering features...")
-	X, y = engineer_features(df_clean)
-	print(X.head(5))
-	print(y.head(5).to_string(index=False))
-
-	print("\nTraining lap time models (80/20 split) and evaluating...")
-	_ = train_and_evaluate(X, y)
-
-	# Train winner prediction model
-	print("\n" + "="*60)
-	print("Training Winner Prediction Model")
-	print("="*60)
-	
-	try:
-		# Collect data from multiple GPs in the year
-		schedule = get_event_schedule(year_example)
-		if not schedule.empty and "EventName" in schedule.columns:
-			gps = schedule["EventName"].dropna().tolist()
-			print(f"Found {len(gps)} Grand Prix events in {year_example}")
-			
 			all_X_list = []
 			all_y_list = []
-			
-			for gp in gps:
-				try:
-					print(f"  Loading data for {gp}...")
-					winner_data = get_winner_prediction_data(year_example, gp)
-					if not winner_data.empty:
-						X_winner, y_winner = engineer_winner_features(winner_data, year_example, gp, include_historical=True)
-						if not X_winner.empty and not y_winner.empty:
-							all_X_list.append(X_winner)
-							all_y_list.append(y_winner)
-							print(f"    Added {len(X_winner)} drivers")
-				except Exception as e:
-					print(f"    Skipped {gp}: {e}")
+
+			for year in years_to_train:
+				print(f"\n{'='*60}")
+				print(f"Loading data for {year} season")
+				print(f"{'='*60}")
+				sys.stdout.flush()
+
+				schedule = get_event_schedule(year)
+				if schedule.empty or "EventName" not in schedule.columns:
+					print(f"  Could not load schedule for {year}, skipping.")
 					continue
-			
-			if all_X_list:
-				# Combine all GP data
+
+				gps = schedule["EventName"].dropna().tolist()
+				print(f"  Found {len(gps)} events")
+
+				for gp in gps:
+					try:
+						print(f"  Loading {gp}...", flush=True)
+						winner_data = get_winner_prediction_data(year, gp)
+						if not winner_data.empty:
+							X_winner, y_winner = engineer_winner_features(
+								winner_data, year, gp, include_historical=True
+							)
+							if not X_winner.empty and not y_winner.empty:
+								all_X_list.append(X_winner)
+								all_y_list.append(y_winner)
+								print(f"    Added {len(X_winner)} drivers")
+					except Exception as e:
+						print(f"    Skipped {gp}: {e}")
+						traceback.print_exc()
+						continue
+
+			if not all_X_list:
+				print("\nNo training data collected. Exiting.")
+			else:
 				X_combined = pd.concat(all_X_list, ignore_index=True)
 				y_combined = pd.concat(all_y_list, ignore_index=True)
-				
+
 				print(f"\nTotal training samples: {len(X_combined)}")
-				print(f"Winners in dataset: {y_combined.sum()}")
-				
+				print(f"Winners in dataset: {int(y_combined.sum())}")
+
 				print("\nTraining winner prediction models...")
-				winner_metrics = train_and_evaluate_winner_model(X_combined, y_combined)
-				print("\nWinner Model Metrics:")
-				for model_name, model_metrics in winner_metrics.items():
+				metrics = train_and_evaluate_winner_model(X_combined, y_combined)
+
+				print("\nModel Metrics:")
+				for model_name, model_metrics in metrics.items():
 					if model_name != "best_model_path":
 						print(f"  {model_name}:")
 						for metric_name, metric_value in model_metrics.items():
 							print(f"    {metric_name}: {metric_value:.4f}")
-			else:
-				print("No winner prediction data collected.")
-		else:
-			print("Could not load event schedule for winner model training.")
-	except Exception as e:
-		print(f"Error training winner model: {e}")
-		import traceback
-		traceback.print_exc()
 
-	if os.getenv("RUN_LIVE_DEMO") == "1":
-		print("\nStarting live prediction loop (simulated polling)...")
-		live_predict_latest_laps(year_example, grand_prix_example, session_example, location="Monaco,MC", iterations=2, sleep_seconds=3)
+				print("\nTRAINING COMPLETE - model saved.")
+
+		except Exception:
+			print("\n\n*** FATAL ERROR - training crashed ***")
+			traceback.print_exc()
+			print("\nCheck training_log.txt for details.")
+
+		finally:
+			sys.stdout = sys.stdout.stdout
+			sys.stderr = sys.stderr.stdout

@@ -3,7 +3,7 @@ import warnings
 
 import pandas as pd
 
-from data_ingestion import get_race_results, get_session_data
+from data_ingestion import get_race_results
 
 
 def extract_winner_labels(df_race: pd.DataFrame, 
@@ -146,35 +146,23 @@ def get_winner_for_race(year: int, gp_name: str) -> str:
 		return ""
 
 
-def get_winner_labels_from_session(year: int, gp_name: str, 
+def get_winner_labels_from_session(year: int, gp_name: str,
                                    session_type: str = "R") -> pd.DataFrame:
-	"""Convenience function to get winner labels directly from session data.
-	
-	This function loads race session data and extracts winner labels in one step.
-	
+	"""Get winner labels for a race using race results.
+
 	Args:
 		year: Year of the race
 		gp_name: Name of the Grand Prix
-		session_type: Session type (default: "R" for Race)
-	
+		session_type: Ignored (kept for API compatibility) — always uses race results
+
 	Returns:
 		DataFrame with Driver and IsWinner columns
 	"""
 	try:
-		df_race = get_session_data(year, gp_name, session_type, include_sprint=False)
-		
-		if df_race.empty:
+		race_results = get_race_results(year, gp_name)
+		if race_results.empty:
 			return pd.DataFrame(columns=["Driver", "IsWinner"])
-		
-		# If session data doesn't have Position, try getting from race results
-		if "Position" not in df_race.columns:
-			race_results = get_race_results(year, gp_name)
-			if not race_results.empty:
-				return extract_winner_labels(race_results)
-			else:
-				return pd.DataFrame(columns=["Driver", "IsWinner"])
-		
-		return extract_winner_labels(df_race)
+		return extract_winner_labels(race_results)
 	except Exception:
 		return pd.DataFrame(columns=["Driver", "IsWinner"])
 

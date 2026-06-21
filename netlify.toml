@@ -5,3 +5,9 @@
 
 [build.environment]
   VITE_API_BASE = "https://YOUR-RENDER-API.onrender.com"
+
+# SPA fallback — React Router needs this so direct links to /results/... work
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

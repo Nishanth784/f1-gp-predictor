@@ -10,10 +10,7 @@ from sklearn.metrics import log_loss, roc_auc_score, accuracy_score
 from sklearn.model_selection import train_test_split
 import joblib
 
-from data_ingestion import get_session_data, get_event_schedule, get_race_results, get_qualifying_results
-from model import load_best_model, align_features_to_model
-from feature_engineering import engineer_features
-from race_aggregation import aggregate_laps_to_race
+from data_ingestion import get_event_schedule, get_race_results, get_qualifying_results
 from winner_labels import extract_winner_labels, get_winner_labels_from_session
 
 
@@ -323,229 +320,6 @@ def add_regulation_features(df_race_features: pd.DataFrame,
 	return result
 
 
-def prepare_race_level_features(year: int, gp_name: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
-	"""Prepare race-level features from lap-level predictions.
-	
-	Pipeline:
-	1. Load race session data
-	2. Generate lap-level predictions using saved lap-time model
-	3. Aggregate to race-level using race_aggregation
-	4. Generate labels using winner_labels
-	
-	Args:
-		year: Year of the race
-		gp_name: Name of the Grand Prix
-	
-	Returns:
-		Tuple of (X: race-level features DataFrame, y: labels Series)
-	"""
-	warnings.filterwarnings("ignore", category=RuntimeWarning)
-	warnings.filterwarnings("ignore", category=UserWarning)
-	
-	# Step 1: Load race session data
-	df_laps = get_session_data(year, gp_name, "R", include_sprint=False)
-	if df_laps.empty:
-		return pd.DataFrame(), pd.Series(dtype=int)
-	
-	# Step 2: Load lap-time model and generate predictions
-	lap_model_data = load_best_model()
-	if lap_model_data is None:
-		raise ValueError("No saved lap-time model found. Train lap-time model first.")
-	
-	lap_model, lap_model_features = lap_model_data
-	
-	# Engineer features for lap-level data
-	X_laps, _ = engineer_features(df_laps)
-	X_laps_aligned = align_features_to_model(X_laps, lap_model_features)
-	
-	if X_laps_aligned.empty:
-		return pd.DataFrame(), pd.Series(dtype=int)
-	
-	# Generate lap-level predictions
-	predicted_lap_times = lap_model.predict(X_laps_aligned)
-	df_laps["PredictedLapTime"] = predicted_lap_times
-	
-	# Step 3: Aggregate to race-level
-	df_race_features = aggregate_laps_to_race(
-		df_laps,
-		predicted_lap_time_col="PredictedLapTime",
-		driver_col="Driver",
-		lap_number_col="LapNumber",
-		tyre_col="Compound",
-		track_temp_col="TrackTemp",
-		air_temp_col="AirTemp"
-	)
-	
-	if df_race_features.empty:
-		return pd.DataFrame(), pd.Series(dtype=int)
-	
-	# Step 3.5: Add regulation-awareness features
-	df_race_features = add_regulation_features(
-		df_race_features,
-		year=year,
-		gp_name=gp_name,
-		driver_col="Driver",
-		team_col="Team" if "Team" in df_race_features.columns else None
-	)
-	
-	# Step 4: Generate labels
-	df_labels = get_winner_labels_from_session(year, gp_name, "R")
-	
-	if df_labels.empty:
-		return pd.DataFrame(), pd.Series(dtype=int)
-	
-	# Merge features with labels on Driver
-	merged = pd.merge(
-		df_race_features,
-		df_labels,
-		on="Driver",
-		how="inner"
-	)
-	
-	if merged.empty or "IsWinner" not in merged.columns:
-		return pd.DataFrame(), pd.Series(dtype=int)
-	
-	# Extract features and labels
-	feature_cols = [c for c in merged.columns if c not in ["Driver", "IsWinner"]]
-	X = merged[feature_cols].select_dtypes(include=[np.number]).fillna(0.0)
-	y = merged["IsWinner"].astype(int)
-	
-	return X, y
-
-
-def train_winner_model_from_races(years: List[int], random_state: int = 42) -> Dict[str, Dict[str, float]]:
-	"""Train winner prediction model using data from multiple races.
-	
-	Args:
-		years: List of years to collect race data from
-		random_state: Random seed
-	
-	Returns:
-		Dictionary with model metrics
-	"""
-	warnings.filterwarnings("ignore", category=RuntimeWarning)
-	warnings.filterwarnings("ignore", category=UserWarning)
-	
-	all_X_list = []
-	all_y_list = []
-	race_info_list = []  # Track which race each sample comes from
-	
-	# Collect data from all races
-	for year in years:
-		schedule = get_event_schedule(year)
-		if schedule.empty or "EventName" not in schedule.columns:
-			continue
-		
-		gps = schedule["EventName"].dropna().tolist()
-		
-		for gp in gps:
-			try:
-				print(f"  Processing {year} {gp}...")
-				X_race, y_race = prepare_race_level_features(year, gp)
-				
-				if not X_race.empty and not y_race.empty:
-					all_X_list.append(X_race)
-					all_y_list.append(y_race)
-					race_info_list.extend([f"{year}_{gp}"] * len(X_race))
-					print(f"    Added {len(X_race)} drivers")
-			except Exception as e:
-				print(f"    Skipped {year} {gp}: {e}")
-				continue
-	
-	if not all_X_list:
-		print("No race data collected.")
-		return {}
-	
-	# Combine all race data
-	X_combined = pd.concat(all_X_list, ignore_index=True)
-	y_combined = pd.concat(all_y_list, ignore_index=True)
-	
-	print(f"\nTotal training samples: {len(X_combined)}")
-	print(f"Winners in dataset: {y_combined.sum()}")
-	
-	if y_combined.sum() == 0:
-		print("Warning: No winners found in training data.")
-		return {}
-	
-	# Train/test split (stratified by winner label)
-	try:
-		X_train, X_test, y_train, y_test = train_test_split(
-			X_combined, y_combined, test_size=0.2, random_state=random_state, stratify=y_combined
-		)
-	except ValueError:
-		# If stratification fails (e.g., too few winners), use regular split
-		X_train, X_test, y_train, y_test = train_test_split(
-			X_combined, y_combined, test_size=0.2, random_state=random_state
-		)
-	
-	# Train models
-	models = {
-		"LogisticRegression": LogisticRegression(random_state=random_state, max_iter=1000, class_weight="balanced"),
-		"GradientBoostingClassifier": GradientBoostingClassifier(random_state=random_state, n_estimators=100),
-	}
-	
-	metrics: Dict[str, Dict[str, float]] = {}
-	best_name: Optional[str] = None
-	best_log_loss: float = float("inf")
-	best_model = None
-	
-	for name, model in models.items():
-		try:
-			print(f"\nTraining {name}...")
-			model.fit(X_train, y_train)
-			
-			# Predictions
-			y_pred = model.predict(X_test)
-			y_pred_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else y_pred.astype(float)
-			
-			# Calculate metrics
-			log_loss_val = float(log_loss(y_test, y_pred_proba))
-			
-			# ROC AUC (handle case where all predictions are same class)
-			try:
-				roc_auc = float(roc_auc_score(y_test, y_pred_proba))
-			except ValueError:
-				roc_auc = 0.0
-			
-			# Top-3 accuracy
-			# Create a DataFrame for top-3 calculation
-			test_df = pd.DataFrame({
-				"win_probability": y_pred_proba,
-				"IsWinner": y_test.values,
-				"Driver": [f"Driver_{i}" for i in range(len(y_test))]  # Placeholder driver names
-			})
-			top3_acc = calculate_top3_accuracy_by_race(test_df)
-			
-			metrics[name] = {
-				"LogLoss": log_loss_val,
-				"ROCAUC": roc_auc,
-				"Top3Accuracy": top3_acc
-			}
-			
-			print(f"  Log Loss: {log_loss_val:.4f}")
-			print(f"  ROC AUC: {roc_auc:.4f}")
-			print(f"  Top-3 Accuracy: {top3_acc:.4f}")
-			
-			# Best model is the one with lowest log loss
-			if log_loss_val < best_log_loss:
-				best_log_loss = log_loss_val
-				best_name = name
-				best_model = model
-		except Exception as e:
-			print(f"Error training {name}: {e}")
-			import traceback
-			traceback.print_exc()
-			continue
-	
-	# Save best model
-	os.makedirs(MODELS_DIR, exist_ok=True)
-	if best_model is not None:
-		joblib.dump({"model": best_model, "features": list(X_combined.columns)}, WINNER_MODEL_PATH)
-		metrics["best_model_path"] = {"path": WINNER_MODEL_PATH}
-		print(f"\nSaved best winner model: {best_name} -> {WINNER_MODEL_PATH}")
-		print(f"Best Log Loss: {best_log_loss:.4f}")
-	
-	return metrics
 
 
 def load_best_winner_model(path: str = WINNER_MODEL_PATH) -> Optional[Tuple[object, List[str]]]:
@@ -623,55 +397,8 @@ def calculate_safety_car_probability(gp_name: str, years: Optional[List[int]] = 
 
 
 def calculate_weather_variance(year: int, gp_name: str) -> float:
-	"""Calculate weather variance during race.
-	
-	Measures how much weather conditions change during the race (temperature, humidity).
-	Higher variance indicates more chaotic conditions.
-	
-	Args:
-		year: Year of the race
-		gp_name: Name of the Grand Prix
-	
-	Returns:
-		Normalized weather variance (0.0 to 1.0)
-	"""
-	try:
-		df_race = get_session_data(year, gp_name, "R", include_sprint=False)
-		if df_race.empty:
-			return 0.0
-		
-		# Calculate variance of weather metrics
-		variances = []
-		
-		if "TrackTemp" in df_race.columns:
-			track_temps = df_race["TrackTemp"].dropna()
-			if len(track_temps) > 1:
-				var = float(track_temps.std())
-				# Normalize: typical range is 20-50°C, so std of 10°C is high variance
-				normalized_var = min(1.0, var / 10.0)
-				variances.append(normalized_var)
-		
-		if "AirTemp" in df_race.columns:
-			air_temps = df_race["AirTemp"].dropna()
-			if len(air_temps) > 1:
-				var = float(air_temps.std())
-				normalized_var = min(1.0, var / 10.0)
-				variances.append(normalized_var)
-		
-		if "Humidity" in df_race.columns:
-			humidity = df_race["Humidity"].dropna()
-			if len(humidity) > 1:
-				var = float(humidity.std())
-				# Normalize: typical range is 30-80%, so std of 15% is high variance
-				normalized_var = min(1.0, var / 15.0)
-				variances.append(normalized_var)
-		
-		if variances:
-			return float(np.mean(variances))
-		else:
-			return 0.0
-	except Exception:
-		return 0.0
+	"""Calculate weather variance during race (returns default — weather telemetry removed in Phase 2)."""
+	return 0.0
 
 
 def calculate_grid_spread(year: int, gp_name: str) -> float:
@@ -831,15 +558,106 @@ def predict_winner_probabilities(model, X: pd.DataFrame, chaos_index: Optional[f
 		# Higher chaos = more uniform distribution
 		n_drivers = len(raw_proba)
 		uniform_proba = np.ones(n_drivers) / n_drivers
-		
+
 		# Interpolate between raw probabilities and uniform based on chaos
 		# chaos_index = 0.0 -> use raw probabilities
 		# chaos_index = 1.0 -> use uniform distribution
 		smoothed_proba = (1.0 - chaos_index) * raw_proba + chaos_index * uniform_proba
-		
+
 		# Renormalize to ensure probabilities sum to 1
 		smoothed_proba = smoothed_proba / smoothed_proba.sum()
-		
+
 		return smoothed_proba
 	else:
 		return raw_proba
+
+
+def train_and_evaluate_winner_model(
+	X: pd.DataFrame,
+	y: pd.Series,
+	test_size: float = 0.2,
+	random_state: int = 42,
+) -> Dict[str, Dict[str, float]]:
+	"""Train GBC + LR winner models, evaluate both, save the best one.
+
+	Args:
+		X: Feature DataFrame (all numeric, no nulls expected)
+		y: Binary Series (1 = race winner, 0 = not)
+		test_size: Fraction held out for evaluation
+		random_state: RNG seed for reproducibility
+
+	Returns:
+		metrics dict keyed by model name, plus 'best_model_path'
+	"""
+	os.makedirs(MODELS_DIR, exist_ok=True)
+
+	feature_names = list(X.columns)
+
+	# Fill any remaining NaNs with 0
+	X = X.fillna(0)
+
+	X_train, X_test, y_train, y_test = train_test_split(
+		X, y, test_size=test_size, random_state=random_state, stratify=y if y.sum() >= 2 else None
+	)
+
+	models = {
+		"GradientBoosting": GradientBoostingClassifier(
+			n_estimators=200,
+			learning_rate=0.05,
+			max_depth=4,
+			subsample=0.8,
+			min_samples_leaf=5,
+			random_state=random_state,
+		),
+		"LogisticRegression": LogisticRegression(
+			C=0.1,
+			max_iter=1000,
+			solver="lbfgs",
+			random_state=random_state,
+		),
+	}
+
+	metrics: Dict[str, Dict[str, float]] = {}
+	best_auc = -1.0
+	best_model = None
+	best_name = ""
+
+	for name, clf in models.items():
+		print(f"  Training {name}...")
+		with warnings.catch_warnings():
+			warnings.simplefilter("ignore")
+			clf.fit(X_train, y_train)
+
+		proba = clf.predict_proba(X_test)[:, 1]
+		preds = clf.predict(X_test)
+
+		try:
+			auc = float(roc_auc_score(y_test, proba))
+		except Exception:
+			auc = 0.5
+		try:
+			ll = float(log_loss(y_test, proba))
+		except Exception:
+			ll = 1.0
+		acc = float(accuracy_score(y_test, preds))
+		top3 = float(calculate_top3_accuracy(y_test.values, proba))
+
+		metrics[name] = {
+			"roc_auc": auc,
+			"log_loss": ll,
+			"accuracy": acc,
+			"top3_accuracy": top3,
+		}
+		print(f"    AUC={auc:.4f}  LogLoss={ll:.4f}  Top3={top3:.4f}")
+
+		if auc > best_auc:
+			best_auc = auc
+			best_model = clf
+			best_name = name
+
+	# Save best model + feature list so the backend can align columns
+	joblib.dump({"model": best_model, "features": feature_names}, WINNER_MODEL_PATH)
+	print(f"\n  Saved best model ({best_name}, AUC={best_auc:.4f}) → {WINNER_MODEL_PATH}")
+
+	metrics["best_model_path"] = WINNER_MODEL_PATH  # type: ignore[assignment]
+	return metrics
