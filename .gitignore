@@ -11,6 +11,9 @@ models/best_model.joblib
 frontend/node_modules/
 frontend/dist/
 
+# Old submodule - exclude entirely
+F1-lap-time-prediction/
+
 # Env / local
 .env
 frontend/.env*
