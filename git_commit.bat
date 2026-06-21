@@ -11,7 +11,7 @@ echo Committing...
 git commit -m "feat: winner-only prediction rebuild + F1 HUD frontend"
 echo.
 echo Pushing to GitHub...
-git push
+git push --set-upstream origin main
 echo.
 echo === Done ===
 pause
