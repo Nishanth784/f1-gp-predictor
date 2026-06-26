@@ -1,0 +1,23 @@
+[
+  {
+    "timestamp": "2026-06-26T09:59:05.439818",
+    "new_years": [
+      2025,
+      2026
+    ],
+    "from_scratch": false,
+    "n_samples": 2814,
+    "n_winners": 140,
+    "before": null,
+    "after": {
+      "roc_auc": 0.9584445927903872,
+      "log_loss": 0.0940782709692093,
+      "accuracy": 0.9626998223801065,
+      "top3_accuracy": 0.10714285714285714,
+      "n_samples": 2814,
+      "n_winners": 140
+    },
+    "backup": "models\\winner_model_20260626_095903.pre_retrain.joblib",
+    "elapsed_s": 894.8
+  }
+]
