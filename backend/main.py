@@ -925,6 +925,213 @@ def circuit_layout(year: int, gp: str):
     empty: Dict[str, Any] = {"points": [], "source_year": None, "session": None}
     _CIRCUIT_LAYOUT_CACHE[cache_key] = empty
     return empty
-": None, "session": None}
-    _CIRCUIT_LAYOUT_CACHE[cache_key] = empty
-    return empty
+
+
+# ---------------------------------------------------------------------------
+# /ws/timing  — WebSocket: FastF1 session replay streamed lap-by-lap
+#
+# Protocol:
+#   server → client  {status:"loading", message:"..."}
+#   server → client  {status:"ready", total_laps:N}
+#   client → server  {action:"start", speed:N}     (N = 1|5|20)
+#   server → client  {status:"lap", lap:N, snapshot:[...], race_control:[...]}
+#   server → client  {status:"finished"}
+#   server → client  {status:"error", message:"..."}
+# ---------------------------------------------------------------------------
+
+def _fmt_lap(td) -> str:
+    """Timedelta → 'M:SS.mmm' string, empty string if null."""
+    try:
+        if td is None or pd.isna(td):
+            return ""
+    except TypeError:
+        return ""
+    s = td.total_seconds()
+    return f"{int(s // 60)}:{s % 60:06.3f}"
+
+
+def _td_to_ms(td) -> Optional[int]:
+    """Timedelta → int milliseconds, None if null."""
+    try:
+        if td is None or pd.isna(td):
+            return None
+    except TypeError:
+        return None
+    return int(td.total_seconds() * 1000)
+
+
+def _sector_col(ms: Optional[int], session_best: Optional[int], drv_best: Optional[int]) -> str:
+    if ms is None:
+        return "grey"
+    if session_best is not None and ms <= session_best:
+        return "purple"
+    if drv_best is not None and ms <= drv_best:
+        return "green"
+    return "yellow"
+
+
+def _safe_int(val, default: int = 99) -> int:
+    try:
+        v = int(val)
+        return v if v == v else default   # NaN check
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_fastf1_session(year: int, gp: str, st: str):
+    """Blocking FastF1 load — called via run_in_executor."""
+    import fastf1
+    try:
+        s = fastf1.get_session(year, gp, st)
+        s.load(telemetry=False, laps=True, weather=False, messages=True)
+        return s
+    except Exception as e:
+        return str(e)
+
+
+@app.websocket("/ws/timing/{year}/{gp}")
+async def ws_timing(ws: WebSocket, year: int, gp: str, session_type: str = "R"):
+    """Stream a FastF1 session lap-by-lap to the TimingTower frontend."""
+    await ws.accept()
+    import json as _json
+
+    async def _send(payload: dict):
+        await ws.send_text(_json.dumps(payload, default=str))
+
+    try:
+        gp_dec = gp.replace("%20", " ").replace("+", " ")
+        st     = session_type.upper()
+
+        await _send({"status": "loading",
+                     "message": f"Loading {year} {gp_dec} {st} — first load may take 30–90 s…"})
+
+        loop    = asyncio.get_running_loop()
+        session = await loop.run_in_executor(None, _load_fastf1_session, year, gp_dec, st)
+
+        if isinstance(session, str):
+            await _send({"status": "error", "message": session})
+            return
+
+        laps_df = session.laps
+        if laps_df is None or laps_df.empty:
+            await _send({"status": "error", "message": "No lap data found for this session."})
+            return
+
+        total_laps = int(laps_df["LapNumber"].max())
+
+        # ── Race control events keyed by lap ──
+        rc_by_lap: Dict[int, List[Dict]] = {}
+        try:
+            rcm = session.race_control_messages
+            if rcm is not None and not rcm.empty:
+                for _, r in rcm.iterrows():
+                    ln = _safe_int(r.get("Lap"), 0)
+                    rc_by_lap.setdefault(ln, []).append({
+                        "lap":      ln,
+                        "category": str(r.get("Category", "")),
+                        "message":  str(r.get("Message", ""))[:120],
+                        "flag":     str(r.get("Flag", "")),
+                    })
+        except Exception:
+            pass  # RC messages are optional
+
+        await _send({"status": "ready", "total_laps": total_laps})
+
+        # ── Wait for start command ──
+        try:
+            raw = await asyncio.wait_for(ws.receive_text(), timeout=60.0)
+            cmd = _json.loads(raw)
+        except asyncio.TimeoutError:
+            await _send({"status": "error", "message": "Timed out waiting for start."})
+            return
+
+        speed = max(0.5, float(cmd.get("speed", 5)))
+
+        # ── Pre-group laps by LapNumber ──
+        by_lap: Dict[int, Any] = {}
+        for ln, grp in laps_df.groupby("LapNumber"):
+            by_lap[int(ln)] = grp
+
+        # ── Session/driver rolling best sectors for colour coding ──
+        sess_best: Dict[str, Optional[int]] = {"s1": None, "s2": None, "s3": None}
+        drv_best_s1: Dict[str, int] = {}
+        drv_best_s2: Dict[str, int] = {}
+        drv_best_s3: Dict[str, int] = {}
+        # Carry-forward: most recent known state per driver
+        drv_state: Dict[str, Dict] = {}
+
+        for lap_n in range(1, total_laps + 1):
+            grp = by_lap.get(lap_n, pd.DataFrame())
+
+            if not grp.empty:
+                for _, r in grp.iterrows():
+                    drv = str(r.get("Driver") or "")
+                    if not drv:
+                        continue
+
+                    s1 = _td_to_ms(r.get("Sector1Time"))
+                    s2 = _td_to_ms(r.get("Sector2Time"))
+                    s3 = _td_to_ms(r.get("Sector3Time"))
+
+                    # Update session bests
+                    if s1 and (sess_best["s1"] is None or s1 < sess_best["s1"]): sess_best["s1"] = s1
+                    if s2 and (sess_best["s2"] is None or s2 < sess_best["s2"]): sess_best["s2"] = s2
+                    if s3 and (sess_best["s3"] is None or s3 < sess_best["s3"]): sess_best["s3"] = s3
+                    # Update driver bests
+                    if s1 and (drv not in drv_best_s1 or s1 < drv_best_s1[drv]): drv_best_s1[drv] = s1
+                    if s2 and (drv not in drv_best_s2 or s2 < drv_best_s2[drv]): drv_best_s2[drv] = s2
+                    if s3 and (drv not in drv_best_s3 or s3 < drv_best_s3[drv]): drv_best_s3[drv] = s3
+
+                    pit_in  = r.get("PitInTime")
+                    pit_out = r.get("PitOutTime")
+                    try:
+                        is_pit = bool(pd.notna(pit_in) or pd.notna(pit_out))
+                    except Exception:
+                        is_pit = False
+
+                    drv_state[drv] = {
+                        "driver":       drv,
+                        "team":         str(r.get("Team") or ""),
+                        "position":     _safe_int(r.get("Position")),
+                        "compound":     str(r.get("Compound") or "UNKNOWN").upper(),
+                        "tyre_life":    _safe_int(r.get("TyreLife"), 0),
+                        "lap_time_fmt": _fmt_lap(r.get("LapTime")),
+                        "sector1_ms":   s1,
+                        "sector2_ms":   s2,
+                        "sector3_ms":   s3,
+                        "is_pit_lap":   is_pit,
+                    }
+
+            # Build snapshot with sector colours
+            snapshot = []
+            for drv, row in drv_state.items():
+                s1, s2, s3 = row["sector1_ms"], row["sector2_ms"], row["sector3_ms"]
+                snapshot.append({
+                    **row,
+                    "s1_colour":     _sector_col(s1, sess_best["s1"], drv_best_s1.get(drv)),
+                    "s2_colour":     _sector_col(s2, sess_best["s2"], drv_best_s2.get(drv)),
+                    "s3_colour":     _sector_col(s3, sess_best["s3"], drv_best_s3.get(drv)),
+                    "gap_to_leader": None,
+                })
+
+            snapshot.sort(key=lambda x: x["position"])
+
+            await _send({
+                "status":       "lap",
+                "lap":          lap_n,
+                "snapshot":     snapshot,
+                "race_control": rc_by_lap.get(lap_n, []),
+            })
+
+            # Pacing: ~1.5 s delay at 1× → 0.3 s at 5×, 0.075 s at 20×
+            await asyncio.sleep(max(0.05, 1.5 / speed))
+
+        await _send({"status": "finished"})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await ws.send_text(_json.dumps({"status": "error", "message": str(e)}, default=str))
+        except Exception:
+            pass
