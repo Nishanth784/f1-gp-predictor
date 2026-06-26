@@ -20,3 +20,6 @@ F1-lap-time-prediction/
 frontend/.env*
 .vscode/
 .DS_Store
+
+models/fastf1_http_cache.sqlite
+models/2026/
