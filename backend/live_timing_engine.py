@@ -15,8 +15,9 @@ from typing import Dict, Any, Optional, List
 
 
 OPENF1 = "https://api.openf1.org/v1"
-POLL_INTERVAL = 3   # seconds between polls
-INIT_WINDOW  = 120  # minutes of history to load on cold start
+POLL_INTERVAL        = 3    # seconds between fast timing polls
+SESSION_CHECK_INTERVAL = 60   # how often to re-query /sessions (rate-limit friendly)
+INIT_WINDOW          = 120  # minutes of history to load on cold start
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,8 @@ class LiveTimingEngine:
 
         self._session_key: Optional[int] = None
         self._last_date:   Optional[str] = None  # ISO timestamp of last delta
+        self._session_check_ts: float = 0.0     # time.monotonic() of last session check
+        self._cached_session = None
 
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -158,14 +161,22 @@ class LiveTimingEngine:
             self._stop.wait(POLL_INTERVAL)
 
     def _poll(self):
-        # ── 1. Session info ────────────────────────────────────────────────
-        sessions = _get("sessions", {"session_key": "latest"})
-        if not sessions:
-            return
-
-        session  = sessions[0]
-        sk       = session["session_key"]
+        # ── 1. Session info — throttled to once per SESSION_CHECK_INTERVAL ──
         now_utc  = datetime.now(timezone.utc)
+        mono     = time.monotonic()
+        if mono - self._session_check_ts >= SESSION_CHECK_INTERVAL:
+            sessions = _get("sessions", {"session_key": "latest"})
+            if not sessions:
+                return
+            self._session_check_ts = mono
+            self._cached_session = sessions[0]
+
+        # Use cached session data between checks
+        if self._cached_session is None:
+            return
+        session = self._cached_session
+
+        sk       = session["session_key"]
 
         # Parse times (OpenF1 uses offset-aware ISO strings)
         def _parse(s):
@@ -179,6 +190,22 @@ class LiveTimingEngine:
             date_start and date_end and
             date_start <= now_utc <= date_end + timedelta(minutes=30)
         )
+
+        # ── 1b. If not live, just publish state and return — don't hammer API ──
+        if not is_live:
+            with self._lock:
+                self._state["is_live"]      = False
+                self._state["session"]      = {
+                    "type":       session.get("session_type", ""),
+                    "name":       session.get("session_name", ""),
+                    "gp":         session.get("location", ""),
+                    "circuit":    session.get("circuit_short_name", ""),
+                    "year":       session.get("year"),
+                    "date_start": session.get("date_start"),
+                    "date_end":   session.get("date_end"),
+                }
+                self._state["last_updated"] = now_utc.isoformat()
+            return
 
         # ── 2. Session changed → reset accumulators ────────────────────────
         if sk != self._session_key:
