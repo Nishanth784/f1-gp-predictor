@@ -593,7 +593,25 @@ async def get_race_control(
         validate_year(year)
         gp = sanitize_gp_name(gp)
         st = _get_session_type(session_type)
-    
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    gp_name = _resolve_gp_name(year, gp)
+
+    try:
+        from backend.live_timing import load_timing_data
+        data = load_timing_data(year, gp_name, st)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
+
+    return {
+        "year":         year,
+        "gp":           gp_name,
+        "session_type": st,
+        "race_control": data.get("race_control", []),
+        "weather":      data.get("weather", []),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Live timing broadcast loop (runs as asyncio background task)
@@ -662,37 +680,3 @@ async def live_status() -> Dict[str, Any]:
         "drivers_live": len(state.get("leaderboard", [])),
         "last_updated": state.get("last_updated"),
     }
-g.get("action") != "start":
-            await websocket.send_json({"status": "idle"})
-            return
-
-        replay_speed = min(max(float(msg.get("speed", speed)), 0.1), 100.0)
-        delay = max(0.1, 5.0 / replay_speed)
-
-        for lap_num in range(1, total + 1):
-            snapshot = get_lap_snapshot(data, lap_num)
-            rc_this_lap = [m for m in data["race_control"]
-                           if (m.get("lap") or 0) == lap_num]
-            await websocket.send_json({
-                "status": "lap",
-                "lap": lap_num,
-                "total_laps": total,
-                "snapshot": snapshot,
-                "race_control": rc_this_lap,
-            })
-            await asyncio.sleep(delay)
-
-        await websocket.send_json({"status": "finished", "total_laps": total})
-
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        try:
-            await websocket.send_json({"status": "error", "message": str(e)})
-        except Exception:
-            pass
-
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "8011"))
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=True)
