@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, RefreshCw, AlertTriangle, Zap, Database } from 'lucide-react'
+import { parseRouteParams } from '../utils/sanitizeParams'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8011'
 
@@ -273,9 +274,9 @@ function DriverRow({ pred, rank, triggered, delay }) {
 
 // ─── Results page ────────────────────────────────────────────────────────────
 export default function Results() {
-  const { year, gp } = useParams()
+  const rawParams = useParams()
+  const { year, gp: gpDecoded } = parseRouteParams(rawParams)
   const navigate = useNavigate()
-  const gpDecoded = decodeURIComponent(gp)
 
   const [data, setData] = useState(null)          // full API response
   const [loading, setLoading] = useState(true)

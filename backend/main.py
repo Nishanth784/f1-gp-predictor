@@ -2,12 +2,42 @@ import os
 import sys
 from typing import Optional, List, Dict, Any, Tuple
 
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+# Load .env before anything else (no-op if file absent or dotenv not installed)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from security import load_env
+load_env()
+
+from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import uvicorn
+import asyncio
 import numpy as np
 import pandas as pd
+
+from security import (
+    SecurityHeadersMiddleware,
+    get_allowed_origins,
+    RateLimits,
+    sanitize_gp_name,
+    validate_session_type,
+    validate_year,
+)
+
+# Optional slowapi rate limiter -- gracefully disabled if package not installed
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    _limiter = Limiter(
+        key_func=get_remote_address,
+        enabled=os.getenv("DISABLE_RATE_LIMITING", "false").lower() != "true",
+    )
+    _RATE_LIMITING = True
+except ImportError:
+    _limiter = None
+    _RATE_LIMITING = False
+    print("[security] slowapi not installed -- rate limiting disabled")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -19,15 +49,41 @@ from winner_model import (
 )
 
 
-app = FastAPI(title="F1 Grand Prix Winner Prediction API", version="3.0.0")
+app = FastAPI(
+    title="F1 Grand Prix Winner Prediction API",
+    version="3.1.0",
+    docs_url="/docs" if os.getenv("ENVIRONMENT", "development") != "production" else None,
+    redoc_url=None,
+)
 
+# Security headers (outermost -- wraps everything)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# CORS
+_allowed_origins = get_allowed_origins()
+print(f"[security] CORS allowed origins: {_allowed_origins}")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
+
+# Rate limiter
+if _RATE_LIMITING and _limiter:
+    app.state.limiter = _limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def _limit(rate: str):
+    """Return a slowapi limiter decorator, or a no-op if slowapi is absent."""
+    if _RATE_LIMITING and _limiter:
+        return _limiter.limit(rate)
+    def _noop(fn):
+        return fn
+    return _noop
+
 
 _winner_model_cache: Optional[Tuple[object, List[str]]] = None
 
@@ -77,9 +133,29 @@ def _resolve_gp_name(year: int, gp_input: str) -> str:
 # ---------------------------------------------------------------------------
 
 class PredictWinnerInput(BaseModel):
-    year: int = Field(..., ge=2010, le=2100)
+    year: int = Field(..., ge=2018, le=2027)
     gp: str
     driver: Optional[str] = None
+
+    @field_validator("year")
+    @classmethod
+    def _check_year(cls, v):
+        return validate_year(v)
+
+    @field_validator("gp")
+    @classmethod
+    def _check_gp(cls, v):
+        return sanitize_gp_name(v)
+
+    @field_validator("driver")
+    @classmethod
+    def _check_driver(cls, v):
+        if v is None:
+            return v
+        v = v.strip().upper()
+        if not v or len(v) > 20:
+            raise ValueError("Driver code must be 1-20 characters.")
+        return v
 
 
 class ScenarioProbs(BaseModel):
@@ -91,7 +167,7 @@ class ScenarioProbs(BaseModel):
 class DriverPrediction(BaseModel):
     driver: str
     team: str
-    win_probability: float          # the "likely" scenario — kept for backward compat
+    win_probability: float
     scenarios: ScenarioProbs
     grid_position: Optional[int] = None
 
@@ -128,7 +204,6 @@ def _build_predictions(
 
     base_probabilities = predict_winner_probabilities(model, X)
 
-    # Check practice cache availability
     has_practice_data = False
     try:
         from practice_data_ingestion import load_practice_features
@@ -137,7 +212,6 @@ def _build_predictions(
     except Exception:
         pass
 
-    # Chaos-adjusted scenario ranges
     chaos_index, sc_rate = 0.3, 0.4
     scenarios_by_driver: List[Dict[str, float]] = []
 
@@ -209,17 +283,24 @@ def _build_predictions(
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
-async def health() -> Dict[str, str]:
-    return {"status": "ok"}
+@_limit(RateLimits.HEALTH)
+async def health(request: Request) -> Dict[str, str]:
+    return {"status": "ok", "version": "3.1.0"}
 
 
 @app.get("/years")
-async def years() -> Dict[str, List[int]]:
+@_limit(RateLimits.METADATA)
+async def years(request: Request) -> Dict[str, List[int]]:
     return {"years": list(range(2018, 2027))}
 
 
 @app.get("/schedule")
-async def schedule(year: int = Query(..., ge=2010, le=2100)) -> Dict[str, Any]:
+@_limit(RateLimits.METADATA)
+async def schedule(request: Request, year: int = Query(..., ge=2018, le=2027)) -> Dict[str, Any]:
+    try:
+        validate_year(year)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     df = get_event_schedule(year)
     if df is None or df.empty or "EventName" not in df.columns:
         raise HTTPException(status_code=404, detail=f"No events found for {year}.")
@@ -228,15 +309,19 @@ async def schedule(year: int = Query(..., ge=2010, le=2100)) -> Dict[str, Any]:
 
 
 @app.get("/winner-probabilities", response_model=WinnerProbabilitiesOutput)
+@_limit(RateLimits.PREDICT)
 async def get_winner_probabilities(
-    year: int = Query(..., ge=2010, le=2100),
-    gp: str = Query(..., description="Grand Prix name"),
+    request: Request,
+    year: int = Query(..., ge=2018, le=2027),
+    gp: str = Query(..., description="Grand Prix name", max_length=80),
 ) -> WinnerProbabilitiesOutput:
-    """
-    Return win probabilities for all drivers, ranked highest first.
-    Includes best_case / likely / worst_case scenario ranges.
-    Automatically uses practice session cache if available.
-    """
+    """Return win probabilities for all drivers. Includes scenario ranges."""
+    try:
+        validate_year(year)
+        gp = sanitize_gp_name(gp)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
     model, expected_features = _get_winner_model()
     gp_name = _resolve_gp_name(year, gp)
 
@@ -253,7 +338,8 @@ async def get_winner_probabilities(
 
 
 @app.post("/predict-winner", response_model=WinnerProbabilitiesOutput)
-async def predict_winner(payload: PredictWinnerInput) -> WinnerProbabilitiesOutput:
+@_limit(RateLimits.PREDICT)
+async def predict_winner(request: Request, payload: PredictWinnerInput) -> WinnerProbabilitiesOutput:
     """Predict winner probabilities, optionally filtered to a single driver."""
     model, expected_features = _get_winner_model()
     gp_name = _resolve_gp_name(payload.year, payload.gp)
@@ -276,7 +362,7 @@ async def predict_winner(payload: PredictWinnerInput) -> WinnerProbabilitiesOutp
 
 
 # ---------------------------------------------------------------------------
-# Practice precompute endpoint (triggered manually after FP3)
+# Practice precompute endpoints
 # ---------------------------------------------------------------------------
 
 def _run_practice_precompute(year: int, gp_name: str) -> None:
@@ -286,7 +372,7 @@ def _run_practice_precompute(year: int, gp_name: str) -> None:
         df = extract_practice_features(year, gp_name)
         if not df.empty:
             path = save_practice_features(df, year, gp_name)
-            print(f"[precompute] Done → {path}")
+            print(f"[precompute] Done -> {path}")
         else:
             print(f"[precompute] No data for {year} {gp_name}")
     except Exception as e:
@@ -294,16 +380,14 @@ def _run_practice_precompute(year: int, gp_name: str) -> None:
 
 
 @app.post("/precompute-practice/{year}/{gp}")
+@_limit(RateLimits.PRECOMPUTE)
 async def precompute_practice(
+    request: Request,
     year: int,
     gp: str,
     background_tasks: BackgroundTasks,
 ) -> Dict[str, str]:
-    """
-    Trigger practice data extraction in the background.
-    Call this after FP3 ends (Saturday morning) for the upcoming race.
-    Takes 10-45 min. Check /practice-status to see when it's ready.
-    """
+    """Trigger practice data extraction in the background after FP3."""
     gp_name = _resolve_gp_name(year, gp)
     background_tasks.add_task(_run_practice_precompute, year, gp_name)
     return {
@@ -314,7 +398,8 @@ async def precompute_practice(
 
 
 @app.get("/practice-status/{year}/{gp}")
-async def practice_status(year: int, gp: str) -> Dict[str, Any]:
+@_limit(RateLimits.METADATA)
+async def practice_status(request: Request, year: int, gp: str) -> Dict[str, Any]:
     """Check whether practice data has been precomputed and cached for a GP."""
     gp_name = _resolve_gp_name(year, gp)
     try:
@@ -331,6 +416,183 @@ async def practice_status(year: int, gp: str) -> Dict[str, Any]:
     except Exception:
         pass
     return {"available": False, "gp": gp_name, "year": year}
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 -- Live Timing Endpoints
+# ---------------------------------------------------------------------------
+
+def _get_session_type(session_type: str) -> str:
+    st = session_type.upper()
+    if st in ("R", "RACE"):          return "R"
+    if st in ("Q", "QUALI"):         return "Q"
+    if st in ("FP1", "FP2", "FP3"): return st
+    return "R"
+
+
+@app.get("/timing/{year}/{gp}")
+@_limit(RateLimits.TIMING)
+async def get_timing(
+    request: Request,
+    year: int,
+    gp: str,
+    session_type: str = Query("R", description="Session type: R, Q, FP1, FP2, FP3"),
+    lap: Optional[int] = Query(None, description="Return snapshot at this lap (omit for all laps)"),
+) -> Dict[str, Any]:
+    """
+    Lap-by-lap timing data for a session with sector colour codes, tyres, pit flags.
+    First call may take 30-90s while FastF1 loads; subsequent calls are instant (cached).
+    """
+    try:
+        validate_year(year)
+        gp = sanitize_gp_name(gp)
+        st = _get_session_type(session_type)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    gp_name = _resolve_gp_name(year, gp)
+
+    try:
+        from backend.live_timing import load_timing_data, get_lap_snapshot
+        data = load_timing_data(year, gp_name, st)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
+
+    if lap is not None:
+        snapshot = get_lap_snapshot(data, lap)
+        return {
+            "year": year, "gp": gp_name, "session_type": st,
+            "lap": lap, "total_laps": data["total_laps"],
+            "snapshot": snapshot,
+            "race_control": [m for m in data["race_control"] if (m.get("lap") or 0) <= lap],
+        }
+
+    return data
+
+
+@app.get("/race-control/{year}/{gp}")
+@_limit(RateLimits.TIMING)
+async def get_race_control(
+    request: Request,
+    year: int,
+    gp: str,
+    session_type: str = Query("R"),
+) -> Dict[str, Any]:
+    """Race control messages: safety cars, flags, DRS, incidents, and weather data."""
+    try:
+        validate_year(year)
+        gp = sanitize_gp_name(gp)
+        st = _get_session_type(session_type)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    gp_name = _resolve_gp_name(year, gp)
+
+    try:
+        from backend.live_timing import load_timing_data
+        data = load_timing_data(year, gp_name, st)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
+
+    return {
+        "year": year, "gp": gp_name, "session_type": st,
+        "race_control": data["race_control"],
+        "weather":      data["weather"],
+        "total_laps":   data["total_laps"],
+    }
+
+
+@app.get("/timing-drivers/{year}/{gp}")
+@_limit(RateLimits.TIMING)
+async def get_timing_drivers(
+    request: Request,
+    year: int,
+    gp: str,
+    session_type: str = Query("R"),
+    driver: str = Query(..., description="3-letter driver code", max_length=20),
+) -> Dict[str, Any]:
+    """All laps for a single driver."""
+    try:
+        validate_year(year)
+        gp = sanitize_gp_name(gp)
+        st = _get_session_type(session_type)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    gp_name = _resolve_gp_name(year, gp)
+
+    try:
+        from backend.live_timing import load_timing_data
+        data = load_timing_data(year, gp_name, st)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
+
+    drv_laps = [l for l in data["laps"] if l["driver"].upper() == driver.upper()]
+    return {
+        "year": year, "gp": gp_name, "session_type": st,
+        "driver": driver.upper(), "total_laps": data["total_laps"],
+        "laps": drv_laps,
+    }
+
+
+@app.websocket("/ws/timing/{year}/{gp}")
+async def ws_timing(websocket: WebSocket, year: int, gp: str,
+                    session_type: str = "R", speed: float = 1.0):
+    """
+    WebSocket: streams lap data lap-by-lap.
+    Send JSON {"action": "start", "speed": 5} to begin replay.
+    speed=1 is real F1 pace; speed=10 is 10x faster.
+    """
+    await websocket.accept()
+    try:
+        gp_name = _resolve_gp_name(year, gp)
+        st = _get_session_type(session_type)
+
+        await websocket.send_json({"status": "loading", "message": "Loading session data..."})
+
+        from backend.live_timing import load_timing_data, get_lap_snapshot
+        try:
+            data = load_timing_data(year, gp_name, st)
+        except Exception as e:
+            await websocket.send_json({"status": "error", "message": str(e)})
+            return
+
+        total = data["total_laps"]
+        await websocket.send_json({
+            "status": "ready", "total_laps": total,
+            "drivers": data["drivers"], "gp": gp_name, "year": year,
+        })
+
+        msg = await websocket.receive_json()
+        if msg.get("action") != "start":
+            await websocket.send_json({"status": "idle"})
+            return
+
+        replay_speed = min(max(float(msg.get("speed", speed)), 0.1), 100.0)
+        delay = max(0.1, 5.0 / replay_speed)
+
+        for lap_num in range(1, total + 1):
+            snapshot = get_lap_snapshot(data, lap_num)
+            rc_this_lap = [m for m in data["race_control"]
+                           if (m.get("lap") or 0) == lap_num]
+            await websocket.send_json({
+                "status": "lap",
+                "lap": lap_num,
+                "total_laps": total,
+                "snapshot": snapshot,
+                "race_control": rc_this_lap,
+            })
+            await asyncio.sleep(delay)
+
+        await websocket.send_json({"status": "finished", "total_laps": total})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"status": "error", "message": str(e)})
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
