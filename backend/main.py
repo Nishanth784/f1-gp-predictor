@@ -95,7 +95,8 @@ _CORNER_PROFILES: Dict[str, Any] = {}
 def _load_corner_profiles() -> None:
     global _CORNER_PROFILES
     import json as _json
-    p = Path(__file__).parent.parent / "models" / "corner_features_2026.json"
+    from pathlib import Path as _Path
+    p = _Path(__file__).parent.parent / "models" / "corner_features_2026.json"
     if p.exists():
         try:
             data = _json.loads(p.read_text())
