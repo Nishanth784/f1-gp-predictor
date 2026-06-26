@@ -93,7 +93,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "camera=(), microphone=(), geolocation=(), payment=()"
         )
         # Remove server fingerprint header if uvicorn set it
-        response.headers.pop("server", None)
+        if "server" in response.headers:
+            del response.headers["server"]
 
         # HSTS — only on real HTTPS, not localhost
         if not is_local:
