@@ -8,42 +8,53 @@ import ChaosDisplay from '../components/ChaosDisplay'
 import { getTeamColour } from '../components/TeamColours'
 import { sanitizeYear, sanitizeGP } from '../utils/sanitizeParams'
 
-// Practice fastest-lap leaderboard
+// Practice fastest-lap leaderboard — uses live engine leaderboard data
 function PracticeLeaderboard({ drivers = [] }) {
   if (!drivers.length) return (
     <div className="flex items-center justify-center h-40">
       <span className="font-mono text-xs" style={{ color: '#3d4f66' }}>AWAITING PRACTICE DATA</span>
     </div>
   )
-  const best = drivers[0]?.fastest_lap_ms ?? 1
+  // Sort by best lap time (null = no lap yet, goes to bottom)
+  const sorted = [...drivers].sort((a, b) => {
+    if (!a.best_lap_s && !b.best_lap_s) return 0
+    if (!a.best_lap_s) return 1
+    if (!b.best_lap_s) return -1
+    return a.best_lap_s - b.best_lap_s
+  })
+  const bestS = sorted[0]?.best_lap_s ?? 1
+
   return (
     <div style={{ overflowY: 'auto', maxHeight: '100%' }}>
-      {drivers.map((d, i) => {
-        const colour = (window.__getTeamColour?.(d.team) || '#8899aa')
-        const gap = i === 0 ? '' : d.gap_ms != null ? `+${(d.gap_ms/1000).toFixed(3)}` : ''
-        const lapStr = d.fastest_lap_ms
-          ? (() => { const s=d.fastest_lap_ms/1000; const m=Math.floor(s/60); return `${m}:${(s%60).toFixed(3).padStart(6,'0')}`})()
-          : '--'
+      {sorted.map((d, i) => {
+        const colour = d.team_colour || '#8899aa'
+        const lapStr = d.best_lap_fmt || '--'
+        const gapS   = i > 0 && d.best_lap_s && sorted[0].best_lap_s
+          ? `+${(d.best_lap_s - sorted[0].best_lap_s).toFixed(3)}`
+          : i === 0 ? 'LEADER' : '--'
+        const posColours = ['#FFD700','#C0C0C0','#CD7F32']
         return (
-          <div key={d.driver} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 12px',
+          <div key={d.driver_number} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 12px',
             borderBottom:'1px solid rgba(255,255,255,0.04)',
             background: i===0 ? 'rgba(255,215,0,0.04)' : 'transparent' }}>
-            <span style={{ fontFamily:'monospace', fontSize:9, color: i<3 ? ['#FFD700','#C0C0C0','#CD7F32'][i] : '#3d4f66', width:20 }}>
+            <span style={{ fontFamily:'monospace', fontSize:9, color: i<3 ? posColours[i] : '#3d4f66', width:20 }}>
               P{i+1}
             </span>
-            <div style={{ width:8, height:8, borderRadius:'50%', background: colour, flexShrink:0,
-              boxShadow:`0 0 6px ${colour}88` }} />
-            <span style={{ fontFamily:'monospace', fontSize:11, fontWeight:700, color:'#fff', width:30 }}>
-              {d.driver?.slice(0,3).toUpperCase()}
+            <div style={{ width:3, height:16, background: colour, borderRadius:1, flexShrink:0 }} />
+            <span style={{ fontFamily:'monospace', fontSize:11, fontWeight:700, color:'#fff', width:32 }}>
+              {(d.acronym||'').slice(0,3).toUpperCase()}
             </span>
             <div style={{ flex:1, height:4, background:'rgba(255,255,255,0.05)', borderRadius:2, overflow:'hidden' }}>
-              <div style={{ width:`${(d.fastest_lap_ms??0)/best*100}%`, height:'100%',
-                background: colour, borderRadius:2 }} />
+              <div style={{ width:`${bestS && d.best_lap_s ? Math.min(100,(bestS/d.best_lap_s)*100) : 0}%`,
+                height:'100%', background: colour, borderRadius:2 }} />
             </div>
-            <span style={{ fontFamily:'monospace', fontSize:10, color: i===0?'#FFD700':colour, width:62, textAlign:'right' }}>
+            <span style={{ fontFamily:'monospace', fontSize:10, fontWeight:700,
+              color: i===0?'#FFD700':colour, width:60, textAlign:'right' }}>
               {lapStr}
             </span>
-            {gap && <span style={{ fontFamily:'monospace', fontSize:9, color:'#3d4f66', width:44, textAlign:'right' }}>{gap}</span>}
+            <span style={{ fontFamily:'monospace', fontSize:9, color:'#3d4f66', width:48, textAlign:'right' }}>
+              {gapS}
+            </span>
           </div>
         )
       })}
@@ -244,15 +255,7 @@ export default function RaceControl() {
         <PanelBox title="PREDICTION TOWER" badge={isPractice ? (liveSession?.session_type || "PRACTICE") : `${drivers.length} DRIVERS`}
           style={{ gridRow: '1', gridColumn: '1' }}>
           {isPractice
-            ? <PracticeLeaderboard drivers={
-                // derive from live leaderboard state if available
-                (liveSession?.leaderboard || []).map((d,i,arr) => ({
-                  driver: d.driver_code || d.name_acronym || d.Driver,
-                  team:   d.team || '',
-                  fastest_lap_ms: d.last_lap_ms ?? null,
-                  gap_ms: i===0 ? 0 : d.gap_to_leader_ms ?? null,
-                })).filter(d=>d.driver)
-              } />
+            ? <PracticeLeaderboard drivers={liveSession?.leaderboard || []} />
             : <LeaderBoard drivers={drivers} loading={loading} />
           }
         </PanelBox>

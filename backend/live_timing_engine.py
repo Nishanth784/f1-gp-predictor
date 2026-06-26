@@ -111,6 +111,7 @@ class LiveTimingEngine:
         self._intervals: Dict[int, Dict] = {}   # latest interval per driver
         self._stints:    Dict[int, Dict] = {}   # latest stint per driver
         self._laps:      Dict[int, Dict] = {}   # latest lap per driver
+        self._best_laps: Dict[int, Dict] = {}   # session best lap per driver (for practice)
         self._rc:        List[Dict]       = []  # all RC messages this session
 
         self._radio:     List[Dict]       = []  # team radio clips this session
@@ -215,6 +216,7 @@ class LiveTimingEngine:
             self._drivers     = {}
             self._positions   = {}
             self._intervals   = {}
+            self._best_laps   = {}
             self._stints      = {}
             self._laps        = {}
             self._rc          = []
@@ -376,6 +378,18 @@ class LiveTimingEngine:
                 except (TypeError, ValueError):
                     pass
 
+            # Best lap for practice leaderboard
+            best_row = self._best_laps.get(dn, {})
+            best_lap_s = None
+            best_lap_fmt = None
+            if best_row.get("lap_duration"):
+                try:
+                    best_lap_s = float(best_row["lap_duration"])
+                    mins = int(best_lap_s // 60)
+                    best_lap_fmt = f"{mins}:{best_lap_s % 60:06.3f}"
+                except (TypeError, ValueError):
+                    pass
+
             leaderboard.append({
                 "position":      position,
                 "driver_number": dn,
@@ -389,6 +403,8 @@ class LiveTimingEngine:
                 "tyre_age":      tyre_age,
                 "current_lap":   (lap_row or {}).get("lap_number") or 0,
                 "last_lap_fmt":  last_lap_fmt,
+                "best_lap_s":    best_lap_s,
+                "best_lap_fmt":  best_lap_fmt,
                 "is_pit_out":    bool((lap_row or {}).get("is_pit_out_lap", False)),
             })
 
