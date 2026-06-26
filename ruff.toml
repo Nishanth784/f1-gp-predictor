@@ -1,0 +1,8 @@
+# Ruff configuration for F1 GP Predictor backend
+# https://docs.astral.sh/ruff/configuration/
+
+[lint]
+# E402: main.py loads .env via load_env() before framework imports — intentional
+# This pattern is required so env vars are set before FastAPI/uvicorn configure
+[lint.per-file-ignores]
+"backend/main.py" = ["E402"]

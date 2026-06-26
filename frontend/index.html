@@ -1,39 +1,29 @@
 <!doctype html>
 <html lang="en">
-	<head>
-		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<meta name="theme-color" content="#e8002d" />
-		<!--
-		  Content Security Policy
-		  - default-src 'self'          : only load resources from our own origin
-		  - script-src 'self'           : no inline scripts; Vite injects via <script type="module">
-		  - style-src 'self' 'unsafe-inline' fonts.googleapis.com : inline styles (Recharts/Vite) + Google Fonts CSS
-		  - font-src fonts.gstatic.com  : Google Fonts binaries
-		  - connect-src 'self' ws: wss: : API calls + WebSocket live timing
-		  - img-src 'self' data:        : base64 data URIs used by some chart libs
-		  - frame-ancestors 'none'      : prevent clickjacking (belt-and-braces with X-Frame-Options)
-		  - base-uri 'self'             : prevent base tag injection attacks
-		  - object-src 'none'           : no Flash / plugins
-		-->
-		<meta http-equiv="Content-Security-Policy" content="
-			default-src 'self';
-			script-src 'self';
-			style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-			font-src https://fonts.gstatic.com;
-			connect-src 'self' http://localhost:8011 ws://localhost:8011 wss: https:;
-			img-src 'self' data:;
-			frame-ancestors 'none';
-			base-uri 'self';
-			object-src 'none';
-		" />
-		<link rel="preconnect" href="https://fonts.googleapis.com">
-		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-		<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,400;0,600;0,700;0,800;1,700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-		<title>F1 GP Predictor</title>
-	</head>
-	<body style="background:#0a0e17;color:#fff;margin:0">
-		<div id="root"></div>
-		<script type="module" src="/src/main.jsx"></script>
-	</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#e8002d" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+        font-src https://fonts.gstatic.com;
+        connect-src 'self' http://localhost:8011 ws://localhost:8011 wss: https:;
+        img-src 'self' data:;
+        frame-ancestors 'none';
+        base-uri 'self';
+        object-src 'none';
+      "
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <title>F1 GP Predictor — Pit Wall</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>

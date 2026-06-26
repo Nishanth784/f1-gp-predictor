@@ -133,7 +133,7 @@ function ScenarioBar({ scenarios, color, triggered, delay = 0 }) {
           />
         )}
 
-        {/* Worst→Best range band */}
+        {/* Worst->Best range band */}
         {triggered && (
           <div
             style={{
@@ -157,9 +157,9 @@ function ScenarioBar({ scenarios, color, triggered, delay = 0 }) {
         />
       </div>
 
-      {/* Range label: worst–best */}
+      {/* Range label: worst-best */}
       <div className="font-mono text-[0.6rem] text-[#3d4f66] w-20 text-right flex-shrink-0 hidden sm:block">
-        {worst.toFixed(0)}%–{best.toFixed(0)}%
+        {worst.toFixed(0)}%-{best.toFixed(0)}%
       </div>
     </div>
   )
@@ -474,7 +474,7 @@ export default function Results() {
               </div>
             </div>
 
-            {/* ── PODIUM ───────────────────────────────────────────────── */}
+            {/* PODIUM */}
             <div className="mb-8">
               <div className="telem-label mb-4">// PODIUM PREDICTION</div>
               <div className="grid grid-cols-3 gap-3">
@@ -493,7 +493,7 @@ export default function Results() {
               </div>
             </div>
 
-            {/* ── FULL FIELD ───────────────────────────────────────────── */}
+            {/* FULL FIELD */}
             {rest.length > 0 && (
               <div>
                 <div className="telem-label mb-3">// FULL FIELD</div>

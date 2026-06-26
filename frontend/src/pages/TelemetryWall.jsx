@@ -61,7 +61,6 @@ export default function TelemetryWall() {
   const chaos    = data?.chaos_index ?? 0
   const scRate   = data?.sc_rate ?? 0
 
-  // Chart 1: Win probability comparison (top 10)
   const probData = top10.map(d => ({
     name: (d.driver || d.Driver || '').slice(0, 3).toUpperCase(),
     likely: d.likely_probability ?? d.probability ?? 0,
@@ -70,13 +69,11 @@ export default function TelemetryWall() {
     colour: getTeamColour(d.team || d.Team || ''),
   }))
 
-  // Chart 2: Scenario spread (best-worst gap, sorted by spread width)
   const spreadData = [...probData]
     .map(d => ({ ...d, spread: (d.best - d.worst) * 100 }))
     .sort((a, b) => b.spread - a.spread)
     .slice(0, 8)
 
-  // Chart 3: Chaos breakdown radar
   const gridSpread = Math.min(1, chaos * 1.2)
   const windFactor = Math.min(1, chaos * 0.8)
   const radarData = [
@@ -87,7 +84,6 @@ export default function TelemetryWall() {
     { metric: 'Variance',    value: spreadData[0]?.spread ?? 0 },
   ]
 
-  // Chart 4: Top 5 probability comparison bars (best/likely/worst grouped)
   const scenarioData = drivers.slice(0, 5).map(d => ({
     name: (d.driver || d.Driver || '').slice(0, 3).toUpperCase(),
     Best:   +((d.scenarios?.best_case ?? 0) * 100).toFixed(1),
@@ -110,7 +106,6 @@ export default function TelemetryWall() {
       <div style={{ flex: 1, display: 'grid', padding: 10, gap: 8,
         gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr' }}>
 
-        {/* Chart 1: Win probability */}
         <PanelBox title="WIN PROBABILITY — TOP 10">
           {loading ? <Skeleton /> : (
             <ResponsiveContainer width="100%" height="100%" minHeight={200}>
@@ -129,7 +124,6 @@ export default function TelemetryWall() {
           )}
         </PanelBox>
 
-        {/* Chart 2: Scenario ranges (best vs worst) */}
         <PanelBox title="SCENARIO SPREAD — BEST vs WORST">
           {loading ? <Skeleton /> : (
             <ResponsiveContainer width="100%" height="100%" minHeight={200}>
@@ -150,7 +144,6 @@ export default function TelemetryWall() {
           )}
         </PanelBox>
 
-        {/* Chart 3: Chaos radar */}
         <PanelBox title="CHAOS BREAKDOWN — RADAR">
           {loading ? <Skeleton /> : (
             <ResponsiveContainer width="100%" height="100%" minHeight={200}>
@@ -165,7 +158,6 @@ export default function TelemetryWall() {
           )}
         </PanelBox>
 
-        {/* Chart 4: Probability uncertainty spread */}
         <PanelBox title="UNCERTAINTY SPREAD — TOP 8 DRIVERS">
           {loading ? <Skeleton /> : (
             <ResponsiveContainer width="100%" height="100%" minHeight={200}>

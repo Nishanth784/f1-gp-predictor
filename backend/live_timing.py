@@ -11,7 +11,6 @@ from typing import Dict, Any, Optional, List, Tuple
 
 import fastf1
 import pandas as pd
-import numpy as np
 
 # In-memory session cache: key = (year, gp_slug, session_type)
 _SESSION_CACHE: Dict[Tuple, Dict[str, Any]] = {}
@@ -115,10 +114,14 @@ def load_timing_data(year: int, gp: str, session_type: str = "R") -> Dict[str, A
             s2 = _ms(row.get("Sector2Time"))
             s3 = _ms(row.get("Sector3Time"))
             lt = _ms(row.get("LapTime"))
-            if s1 and (drv not in pb_s1 or s1 < pb_s1[drv]): pb_s1[drv] = s1
-            if s2 and (drv not in pb_s2 or s2 < pb_s2[drv]): pb_s2[drv] = s2
-            if s3 and (drv not in pb_s3 or s3 < pb_s3[drv]): pb_s3[drv] = s3
-            if lt and (drv not in pb_lap or lt < pb_lap[drv]): pb_lap[drv] = lt
+            if s1 and (drv not in pb_s1 or s1 < pb_s1[drv]):
+                pb_s1[drv] = s1
+            if s2 and (drv not in pb_s2 or s2 < pb_s2[drv]):
+                pb_s2[drv] = s2
+            if s3 and (drv not in pb_s3 or s3 < pb_s3[drv]):
+                pb_s3[drv] = s3
+            if lt and (drv not in pb_lap or lt < pb_lap[drv]):
+                pb_lap[drv] = lt
 
         # Overall session bests (for purple)
         best_s1 = min(pb_s1.values()) if pb_s1 else None

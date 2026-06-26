@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 import uvicorn
 import asyncio
-import numpy as np
 import pandas as pd
 
 from security import (
@@ -20,7 +19,6 @@ from security import (
     get_allowed_origins,
     RateLimits,
     sanitize_gp_name,
-    validate_session_type,
     validate_year,
 )
 
@@ -45,7 +43,6 @@ from data_ingestion import get_event_schedule, get_winner_prediction_data
 from winner_feature_engineering import engineer_winner_features
 from winner_model import (
     load_best_winner_model, align_winner_features_to_model, predict_winner_probabilities,
-    add_regulation_features,
 )
 
 
@@ -424,9 +421,12 @@ async def practice_status(request: Request, year: int, gp: str) -> Dict[str, Any
 
 def _get_session_type(session_type: str) -> str:
     st = session_type.upper()
-    if st in ("R", "RACE"):          return "R"
-    if st in ("Q", "QUALI"):         return "Q"
-    if st in ("FP1", "FP2", "FP3"): return st
+    if st in ("R", "RACE"):
+        return "R"
+    if st in ("Q", "QUALI"):
+        return "Q"
+    if st in ("FP1", "FP2", "FP3"):
+        return st
     return "R"
 
 
@@ -527,7 +527,7 @@ async def get_timing_drivers(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
 
-    drv_laps = [l for l in data["laps"] if l["driver"].upper() == driver.upper()]
+    drv_laps = [lap for lap in data["laps"] if lap["driver"].upper() == driver.upper()]
     return {
         "year": year, "gp": gp_name, "session_type": st,
         "driver": driver.upper(), "total_laps": data["total_laps"],

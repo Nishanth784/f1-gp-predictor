@@ -303,7 +303,7 @@ export default function RadioFeed() {
                       <span style={{ fontFamily: 'monospace', fontSize: 8, color: '#3d4f66' }}>{m.label}</span>
                     </div>
                     <span style={{ fontFamily: 'monospace', fontSize: 9, fontWeight: 700, color: m.colour }}>
-                      ×{count}
+                      x{count}
                     </span>
                   </div>
                 )
