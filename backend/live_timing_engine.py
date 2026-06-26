@@ -115,6 +115,9 @@ class LiveTimingEngine:
         self._radio:     List[Dict]       = []  # team radio clips this session
         self._radio_seen: set             = set()  # dedupe by recording_url
 
+        self._locations:    Dict[int, Dict]        = {}  # latest x/y per driver
+        self._loc_history:  Dict[int, List[tuple]] = {}  # per-driver ordered (x,y)
+
         self._session_key: Optional[int] = None
         self._last_date:   Optional[str] = None  # ISO timestamp of last delta
 
@@ -190,6 +193,8 @@ class LiveTimingEngine:
             self._rc          = []
             self._radio       = []
             self._radio_seen  = set()
+            self._locations   = {}
+            self._loc_history = {}
 
         # ── 3. Load drivers once per session ──────────────────────────────
         if not self._drivers:
@@ -216,6 +221,7 @@ class LiveTimingEngine:
         new_rc        = delta("race_control")
         new_weather   = _get("weather", {"session_key": sk})
         new_radio     = delta("team_radio")
+        new_location  = delta("location")
 
         # ── 6. Merge into accumulators ─────────────────────────────────────
         for row in new_pos:
@@ -266,6 +272,43 @@ class LiveTimingEngine:
         # Newest first, keep last 30
         self._radio.sort(key=lambda x: x.get("date",""), reverse=True)
         self._radio = self._radio[:30]
+        # Merge GPS locations — latest per driver + per-driver ordered history
+        for row in sorted(new_location, key=lambda r: r.get("date", "")):
+            dn = row.get("driver_number")
+            x, y = row.get("x"), row.get("y")
+            if dn is None or x is None or y is None:
+                continue
+            if (dn not in self._locations or
+                    row.get("date", "") > self._locations[dn].get("date", "")):
+                self._locations[dn] = row
+            if dn not in self._loc_history:
+                self._loc_history[dn] = []
+            self._loc_history[dn].append((float(x), float(y)))
+            # Cap per driver at 2 500 points (~1-2 full laps)
+            if len(self._loc_history[dn]) > 2500:
+                self._loc_history[dn] = self._loc_history[dn][-2500:]
+
+        # Build car_positions for output
+        car_positions = []
+        for dn, loc in self._locations.items():
+            drv = self._drivers.get(dn, {})
+            x, y = loc.get("x"), loc.get("y")
+            if x is not None and y is not None:
+                car_positions.append({
+                    "driver_number": dn,
+                    "acronym":       drv.get("name_acronym", f"#{dn}"),
+                    "team_colour":   "#" + (drv.get("team_colour") or "888888"),
+                    "x":             float(x),
+                    "y":             float(y),
+                })
+
+        # Build track_outline: use the car with the most GPS history (cleanest lap trace)
+        track_outline: List[Dict] = []
+        if self._loc_history:
+            best_dn   = max(self._loc_history, key=lambda k: len(self._loc_history[k]))
+            best_path = self._loc_history[best_dn]
+            step      = max(1, len(best_path) // 600)
+            track_outline = [{"x": p[0], "y": p[1]} for p in best_path[::step]]
 
         # Latest weather snapshot
         weather = new_weather[-1] if new_weather else None
@@ -366,14 +409,16 @@ class LiveTimingEngine:
                 "date_start": session.get("date_start"),
                 "date_end":   session.get("date_end"),
             },
-            "is_live":      is_live,
-            "leaderboard":  leaderboard,
-            "race_control": rc_out,
-            "team_radio":   self._radio[:30],
-            "weather":      wx_out,
-            "lap_count":    {"current": total_laps, "total": 0},
-            "track_status": track_status,
-            "last_updated": now_utc.isoformat(),
+            "is_live":       is_live,
+            "leaderboard":   leaderboard,
+            "race_control":  rc_out,
+            "team_radio":    self._radio[:30],
+            "car_positions": car_positions,
+            "track_outline": track_outline,
+            "weather":       wx_out,
+            "lap_count":     {"current": total_laps, "total": 0},
+            "track_status":  track_status,
+            "last_updated":  now_utc.isoformat(),
         }
 
         with self._lock:
@@ -382,7 +427,8 @@ class LiveTimingEngine:
         if is_live:
             print(f"[live_engine] {session.get('session_name')} | "
                   f"lap {total_laps} | {track_status} | "
-                  f"{len(leaderboard)} drivers | rc={len(self._rc)}")
+                  f"{len(leaderboard)} drivers | rc={len(self._rc)} | "
+                  f"cars_gps={len(car_positions)}")
 
 
 # ---------------------------------------------------------------------------
