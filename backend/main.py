@@ -106,6 +106,49 @@ def _predictions_cache_set(year: int, gp: str, result: Any) -> None:
     _predictions_cache[f"{year}_{gp.lower()}"] = (time.time(), result)
 
 
+from live_timing_engine import start_engine, get_live_state, is_session_live, get_engine
+
+
+# ---------------------------------------------------------------------------
+# WebSocket connection manager
+# ---------------------------------------------------------------------------
+
+class _LiveConnectionManager:
+    def __init__(self):
+        self._clients: List[WebSocket] = []
+        self._lock = asyncio.Lock()
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        async with self._lock:
+            self._clients.append(ws)
+        print(f"[ws/live] client connected — total {len(self._clients)}")
+
+    async def disconnect(self, ws: WebSocket):
+        async with self._lock:
+            self._clients = [c for c in self._clients if c is not ws]
+        print(f"[ws/live] client disconnected — total {len(self._clients)}")
+
+    async def broadcast(self, payload: dict):
+        import json
+        msg = json.dumps(payload)
+        dead = []
+        for ws in list(self._clients):
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            await self.disconnect(ws)
+
+    @property
+    def count(self) -> int:
+        return len(self._clients)
+
+
+_live_mgr = _LiveConnectionManager()
+
+
 @app.on_event("startup")
 async def load_winner_model_on_startup():
     global _winner_model_cache
@@ -117,8 +160,11 @@ async def load_winner_model_on_startup():
             print("Warning: No winner model found. Run main.py to train first.")
     except Exception as e:
         print(f"Error loading winner model: {e}")
-    # Kick off background pre-warm for the most recent completed race
+    # Start live timing engine
+    start_engine()
+    # Kick off background tasks
     asyncio.create_task(_prewarm_recent_race())
+    asyncio.create_task(_live_broadcast_loop())
 
 
 async def _prewarm_recent_race():
@@ -547,88 +593,76 @@ async def get_race_control(
         validate_year(year)
         gp = sanitize_gp_name(gp)
         st = _get_session_type(session_type)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    
 
-    gp_name = _resolve_gp_name(year, gp)
+# ---------------------------------------------------------------------------
+# Live timing broadcast loop (runs as asyncio background task)
+# ---------------------------------------------------------------------------
 
-    try:
-        from backend.live_timing import load_timing_data
-        data = load_timing_data(year, gp_name, st)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
-
-    return {
-        "year": year, "gp": gp_name, "session_type": st,
-        "race_control": data["race_control"],
-        "weather":      data["weather"],
-        "total_laps":   data["total_laps"],
-    }
-
-
-@app.get("/timing-drivers/{year}/{gp}")
-@_limit(RateLimits.TIMING)
-async def get_timing_drivers(
-    request: Request,
-    year: int,
-    gp: str,
-    session_type: str = Query("R"),
-    driver: str = Query(..., description="3-letter driver code", max_length=20),
-) -> Dict[str, Any]:
-    """All laps for a single driver."""
-    try:
-        validate_year(year)
-        gp = sanitize_gp_name(gp)
-        st = _get_session_type(session_type)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    gp_name = _resolve_gp_name(year, gp)
-
-    try:
-        from backend.live_timing import load_timing_data
-        data = load_timing_data(year, gp_name, st)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load session: {e}")
-
-    drv_laps = [lap for lap in data["laps"] if lap["driver"].upper() == driver.upper()]
-    return {
-        "year": year, "gp": gp_name, "session_type": st,
-        "driver": driver.upper(), "total_laps": data["total_laps"],
-        "laps": drv_laps,
-    }
-
-
-@app.websocket("/ws/timing/{year}/{gp}")
-async def ws_timing(websocket: WebSocket, year: int, gp: str,
-                    session_type: str = "R", speed: float = 1.0):
-    """
-    WebSocket: streams lap data lap-by-lap.
-    Send JSON {"action": "start", "speed": 5} to begin replay.
-    speed=1 is real F1 pace; speed=10 is 10x faster.
-    """
-    await websocket.accept()
-    try:
-        gp_name = _resolve_gp_name(year, gp)
-        st = _get_session_type(session_type)
-
-        await websocket.send_json({"status": "loading", "message": "Loading session data..."})
-
-        from backend.live_timing import load_timing_data, get_lap_snapshot
+async def _live_broadcast_loop():
+    """Push engine state to all connected /ws/live clients every POLL_INTERVAL seconds."""
+    import json
+    while True:
         try:
-            data = load_timing_data(year, gp_name, st)
+            if _live_mgr.count > 0:
+                state = get_live_state()
+                await _live_mgr.broadcast({"type": "state", "data": state})
         except Exception as e:
-            await websocket.send_json({"status": "error", "message": str(e)})
-            return
+            print(f"[ws/live] broadcast error: {e}")
+        await asyncio.sleep(3)
 
-        total = data["total_laps"]
-        await websocket.send_json({
-            "status": "ready", "total_laps": total,
-            "drivers": data["drivers"], "gp": gp_name, "year": year,
-        })
 
-        msg = await websocket.receive_json()
-        if msg.get("action") != "start":
+# ---------------------------------------------------------------------------
+# /ws/live  — WebSocket endpoint for real-time pit wall
+# ---------------------------------------------------------------------------
+
+@app.websocket("/ws/live")
+async def ws_live(ws: WebSocket):
+    await _live_mgr.connect(ws)
+    try:
+        # Send current state immediately on connect
+        state = get_live_state()
+        await ws.send_text(__import__("json").dumps({"type": "state", "data": state}))
+        # Keep connection alive; client sends pings
+        while True:
+            try:
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=30)
+                if msg == "ping":
+                    await ws.send_text('{"type":"pong"}')
+            except asyncio.TimeoutError:
+                await ws.send_text('{"type":"ping"}')
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[ws/live] error: {e}")
+    finally:
+        await _live_mgr.disconnect(ws)
+
+
+# ---------------------------------------------------------------------------
+# /live-status  — REST: is a session currently live?
+# ---------------------------------------------------------------------------
+
+@app.get("/live-status")
+async def live_status() -> Dict[str, Any]:
+    """Returns current session info and whether it is live right now."""
+    state = get_live_state()
+    session = state.get("session") or {}
+    return {
+        "is_live":      state.get("is_live", False),
+        "session_name": session.get("name", ""),
+        "session_type": session.get("type", ""),
+        "gp":           session.get("gp", ""),
+        "circuit":      session.get("circuit", ""),
+        "year":         session.get("year"),
+        "date_start":   session.get("date_start"),
+        "date_end":     session.get("date_end"),
+        "track_status": state.get("track_status", "AllClear"),
+        "lap_count":    state.get("lap_count", {}),
+        "drivers_live": len(state.get("leaderboard", [])),
+        "last_updated": state.get("last_updated"),
+    }
+g.get("action") != "start":
             await websocket.send_json({"status": "idle"})
             return
 

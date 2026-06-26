@@ -10,6 +10,7 @@ import ScenarioModeller from './pages/ScenarioModeller'
 import TimingTower from './pages/TimingTower'
 import RadioFeed from './pages/RadioFeed'
 import Results from './pages/Results'
+import LivePitWall from './pages/LivePitWall'
 
 // Wrap each page in its own ErrorBoundary so one crashing route
 // doesn't take down the whole app. The label surfaces in the fallback UI.
@@ -30,6 +31,7 @@ const router = createBrowserRouter([
   { path: '/timing/:year/:gp',        element: page(TimingTower,       'timing tower') },
   { path: '/radio/:year/:gp',         element: page(RadioFeed,         'RC feed') },
   { path: '/results/:year/:gp',       element: page(Results,           'results') },
+  { path: '/live',                    element: page(LivePitWall,       'live pit wall') },
   { path: '*',                        element: <Navigate to="/" replace /> },
 ])
 
