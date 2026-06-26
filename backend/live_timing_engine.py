@@ -29,6 +29,13 @@ def _get(endpoint: str, params: dict | None = None) -> List[Dict]:
         r = requests.get(f"{OPENF1}/{endpoint}", params=params, timeout=8)
         r.raise_for_status()
         return r.json()
+    except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if (hasattr(e, "response") and e.response is not None) else "?"
+        print(f"[openf1] {endpoint} HTTP {code}: {e}")
+        return []
+    except requests.exceptions.Timeout:
+        print(f"[openf1] {endpoint} TIMEOUT (params={params})")
+        return []
     except Exception as e:
         print(f"[openf1] {endpoint} failed: {e}")
         return []
@@ -250,7 +257,15 @@ class LiveTimingEngine:
         new_rc        = delta("race_control")
         new_weather   = _get("weather", {"session_key": sk})
         new_radio     = delta("team_radio")
-        new_location  = delta("location")
+        # Location is high-frequency (~4 Hz × 20 cars). Using the full INIT_WINDOW on cold
+        # start would request millions of rows and time-out. Instead seed from last 30 s so
+        # we get current positions immediately; the outline builds up over subsequent polls.
+        _loc_since = (
+            (now_utc - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%S")
+            if self._last_date is None
+            else date_filter
+        )
+        new_location  = _get("location", {"session_key": sk, "date>": _loc_since})
 
         # ── 6. Merge into accumulators ─────────────────────────────────────
         for row in new_pos:

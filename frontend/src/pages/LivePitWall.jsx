@@ -181,7 +181,7 @@ function RadioClip({ clip }) {
   )
 }
 
-function TrackMap({ outline, cars }) {
+function TrackMap({ outline, cars, wsStatus }) {
   const W = 340, H = 300, PAD = 18
 
   const allPts = [
@@ -190,11 +190,20 @@ function TrackMap({ outline, cars }) {
   ]
 
   if (allPts.length === 0) {
+    const msg = wsStatus === 'connecting' ? 'CONNECTING...'
+              : wsStatus === 'offline'    ? 'OFFLINE — RETRYING'
+              : wsStatus === 'live'       ? 'BUILDING TRACK MAP…'
+              :                            'NO ACTIVE SESSION'
     return (
       <div style={{ width: '100%', height: '100%', display: 'flex',
         alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 8 }}>
         <MapPin size={16} style={{ color: '#1e2535' }} />
-        <span className="font-mono" style={{ fontSize: 9, color: '#1e2535' }}>AWAITING GPS DATA</span>
+        <span className="font-mono" style={{ fontSize: 9, color: '#1e2535' }}>{msg}</span>
+        {wsStatus === 'live' && (
+          <span className="font-mono" style={{ fontSize: 8, color: '#2a3545' }}>
+            GPS data arrives after first lap
+          </span>
+        )}
       </div>
     )
   }
@@ -280,10 +289,13 @@ function WeatherStrip({ wx }) {
   )
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8011'
+
 export default function LivePitWall() {
-  const [state, setState]     = useState(null)
-  const [wsStatus, setStatus] = useState('connecting')
-  const [rightTab, setRightTab] = useState('rc')
+  const [state, setState]           = useState(null)
+  const [wsStatus, setStatus]       = useState('connecting')
+  const [rightTab, setRightTab]     = useState('rc')
+  const [circuitOutline, setCircuit] = useState([])   // pre-loaded from FastF1
   const wsRef    = useRef(null)
   const retryRef = useRef(null)
 
@@ -292,7 +304,8 @@ export default function LivePitWall() {
     setStatus('connecting')
     const ws = new WebSocket(`${WS_BASE}/ws/live`)
     wsRef.current = ws
-    ws.onopen    = () => setStatus('connecting')
+    // Note: don't reset status in onopen — it was already set to 'connecting' above.
+    // Status resolves to 'live'/'replay' when the first state message arrives.
     ws.onmessage = e => {
       try {
         const msg = JSON.parse(e.data)
@@ -300,7 +313,7 @@ export default function LivePitWall() {
           setState(msg.data)
           setStatus(msg.data?.is_live ? 'live' : 'replay')
         }
-        if (msg.type === 'ping') ws.send('ping')
+        if (msg.type === 'ping' || msg.type === 'pong') ws.send('ping')
       } catch {}
     }
     ws.onerror  = () => setStatus('offline')
@@ -322,12 +335,24 @@ export default function LivePitWall() {
     }
   }, [connect])
 
+  // Pre-load circuit outline from FastF1 whenever the session GP changes
+  useEffect(() => {
+    const gp   = state?.session?.gp
+    const year = state?.session?.year
+    if (!gp || !year) return
+    fetch(`${API_BASE}/circuit-layout/${year}/${encodeURIComponent(gp)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.points?.length > 20) setCircuit(d.points) })
+      .catch(() => {})
+  }, [state?.session?.gp, state?.session?.year])
+
   const session      = state?.session
   const leaderboard  = state?.leaderboard   || []
   const rcMessages   = state?.race_control  || []
   const radioClips   = state?.team_radio    || []
   const carPositions = state?.car_positions || []
-  const trackOutline = state?.track_outline || []
+  // Prefer live GPS outline; fall back to FastF1 pre-loaded outline
+  const trackOutline = (state?.track_outline?.length > 20 ? state.track_outline : circuitOutline)
   const weather      = state?.weather
   const lapCount     = state?.lap_count     || {}
   const trackStatus  = state?.track_status  || 'AllClear'
@@ -428,7 +453,7 @@ export default function LivePitWall() {
             )}
           </div>
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <TrackMap outline={trackOutline} cars={carPositions} />
+            <TrackMap outline={trackOutline} cars={carPositions} wsStatus={wsStatus} />
           </div>
         </div>
 
@@ -475,9 +500,13 @@ export default function LivePitWall() {
                 <div style={{ padding: 16, textAlign: 'center',
                   display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
                   <Radio size={16} style={{ color: '#1e2535' }} />
-                  <span className="font-mono" style={{ fontSize: 9, color: '#2a3545' }}>NO RADIO CLIPS</span>
+                  <span className="font-mono" style={{ fontSize: 9, color: '#2a3545' }}>
+                    {wsStatus === 'live' ? 'AWAITING RADIO CLIPS' : 'NO RADIO CLIPS'}
+                  </span>
                   <span className="font-mono" style={{ fontSize: 8, color: '#1e2535' }}>
-                    CLIPS APPEAR DURING SESSIONS
+                    {wsStatus === 'live'
+                      ? 'Teams broadcast during live sessions'
+                      : 'Radio available during live sessions only'}
                   </span>
                 </div>
               ) : radioClips.map((clip, i) => (

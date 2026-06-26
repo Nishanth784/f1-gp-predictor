@@ -879,3 +879,52 @@ async def live_status() -> Dict[str, Any]:
         "drivers_live": len(state.get("leaderboard", [])),
         "last_updated": state.get("last_updated"),
     }
+# ---------------------------------------------------------------------------
+# /circuit-layout  — FastF1 track outline (x/y array) for a given GP
+# Used by LivePitWall to pre-populate the track map before live GPS builds up.
+# ---------------------------------------------------------------------------
+
+_CIRCUIT_LAYOUT_CACHE: Dict[str, Any] = {}
+
+@app.get("/circuit-layout/{year}/{gp}")
+def circuit_layout(year: int, gp: str):
+    """Return a list of {x,y} points tracing the circuit outline (from FastF1)."""
+    cache_key = f"{year}_{gp}"
+    if cache_key in _CIRCUIT_LAYOUT_CACHE:
+        return _CIRCUIT_LAYOUT_CACHE[cache_key]
+
+    import fastf1
+
+    # Try the requested year first, fall back to recent years with stable telemetry
+    for try_year in [year, 2025, 2024]:
+        for session_type in ["Q", "R", "FP1"]:
+            try:
+                s = fastf1.get_session(try_year, gp, session_type)
+                s.load(telemetry=False, laps=True, weather=False, messages=False)
+                fast = s.laps.pick_fastest()
+                if fast is None or (hasattr(fast, "empty") and fast.empty):
+                    continue
+                tel = fast.get_telemetry()
+                if tel is None or tel.empty or "X" not in tel.columns:
+                    continue
+                xs = tel["X"].dropna().tolist()
+                ys = tel["Y"].dropna().tolist()
+                if len(xs) < 100:
+                    continue
+                # Downsample to ≤800 points for reasonable payload size
+                step = max(1, len(xs) // 800)
+                points = [{"x": float(xs[i]), "y": float(ys[i])} for i in range(0, len(xs), step)]
+                result = {"points": points, "source_year": try_year, "session": session_type}
+                _CIRCUIT_LAYOUT_CACHE[cache_key] = result
+                print(f"[circuit-layout] {gp} ({try_year} {session_type}): {len(points)} pts")
+                return result
+            except Exception as e:
+                print(f"[circuit-layout] {gp} {try_year} {session_type} failed: {e}")
+                continue
+
+    empty: Dict[str, Any] = {"points": [], "source_year": None, "session": None}
+    _CIRCUIT_LAYOUT_CACHE[cache_key] = empty
+    return empty
+": None, "session": None}
+    _CIRCUIT_LAYOUT_CACHE[cache_key] = empty
+    return empty
