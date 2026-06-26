@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import { parseRouteParams } from '../utils/sanitizeParams'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  LineChart, AreaChart, Area, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   ReferenceLine, CartesianGrid,
 } from 'recharts'
 import StatusBanner from '../components/StatusBanner'
@@ -53,6 +53,8 @@ export default function TelemetryWall() {
   const [error, setError]     = useState(null)
   const [selected, setSelected] = useState('')
   const [session, setSession]   = useState('R')   // R | Q
+  const [carTelem, setCarTelem]     = useState(null)
+  const [telemLoading, setTelemLoading] = useState(false)
 
   useEffect(() => {
     if (!year || !gpDecoded) return
@@ -69,6 +71,17 @@ export default function TelemetryWall() {
       })
       .catch(e => { setError(e.message); setLoading(false) })
   }, [year, gpDecoded, session])
+
+  // Car telemetry — fetch when driver changes
+  useEffect(() => {
+    if (!year || !gpDecoded || !selected) return
+    setCarTelem(null)
+    setTelemLoading(true)
+    fetch(`${API_BASE}/car-telemetry/${year}/${encodeURIComponent(gpDecoded)}/${selected}?session_type=${session}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { setCarTelem(d); setTelemLoading(false) })
+      .catch(() => setTelemLoading(false))
+  }, [year, gpDecoded, selected, session])
 
   // All laps for selected driver
   const driverLaps = useMemo(() => {
@@ -371,6 +384,133 @@ export default function TelemetryWall() {
                 })
               })()}
             </div>
+          </PanelBox>
+
+        </div>
+      )}
+
+      {/* ── CAR TELEMETRY SECTION ── */}
+      {!loading && data && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, padding: '0 10px 10px' }}>
+
+          {/* Speed Trace */}
+          <PanelBox title={`SPEED — ${selected?.slice(0,3).toUpperCase() || ''} FASTEST LAP`}
+            badge={carTelem?.lap_time || (telemLoading ? 'LOADING…' : '')}>
+            {telemLoading ? (
+              <div className="flex items-center gap-2">
+                <div style={{ width:14,height:14,borderRadius:'50%',border:'2px solid #27F4D2',
+                  borderTopColor:'transparent',animation:'spin 0.8s linear infinite'}} />
+                <span className="font-mono text-xs" style={{color:'#3d4f66'}}>FETCHING TELEMETRY…</span>
+              </div>
+            ) : !carTelem?.telemetry?.length ? (
+              <span className="font-mono text-xs" style={{color:'#3d4f66'}}>NO TELEMETRY DATA</span>
+            ) : (
+              <ResponsiveContainer width="100%" height={120}>
+                <AreaChart data={carTelem.telemetry} margin={{top:4,right:4,left:-20,bottom:0}}>
+                  <defs>
+                    <linearGradient id="speedGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#27F4D2" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#27F4D2" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="dist" tick={{fontFamily:'monospace',fontSize:8,fill:'#3d4f66'}}
+                    tickFormatter={v=>`${v.toFixed(0)}%`} />
+                  <YAxis tick={{fontFamily:'monospace',fontSize:8,fill:'#3d4f66'}}
+                    domain={['auto','auto']} unit=" km/h" width={52} />
+                  <Tooltip contentStyle={{background:'#0d1018',border:'1px solid #1e2535',
+                    fontFamily:'monospace',fontSize:10}}
+                    formatter={(v)=>[`${v} km/h`,'Speed']} labelFormatter={v=>`${v}%`} />
+                  <Area type="monotone" dataKey="speed" stroke="#27F4D2" fill="url(#speedGrad)"
+                    strokeWidth={1.5} dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </PanelBox>
+
+          {/* Throttle + Brake */}
+          <PanelBox title={`THROTTLE & BRAKE — ${selected?.slice(0,3).toUpperCase() || ''}`}>
+            {telemLoading ? (
+              <span className="font-mono text-xs" style={{color:'#3d4f66'}}>LOADING…</span>
+            ) : !carTelem?.telemetry?.length ? (
+              <span className="font-mono text-xs" style={{color:'#3d4f66'}}>NO DATA</span>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={60}>
+                  <AreaChart data={carTelem.telemetry} margin={{top:2,right:4,left:-20,bottom:0}}>
+                    <defs>
+                      <linearGradient id="throtGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#00ff88" stopOpacity={0.4}/>
+                        <stop offset="95%" stopColor="#00ff88" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="dist" hide />
+                    <YAxis tick={{fontFamily:'monospace',fontSize:7,fill:'#3d4f66'}} domain={[0,100]} width={28} />
+                    <Tooltip contentStyle={{background:'#0d1018',border:'1px solid #1e2535',
+                      fontFamily:'monospace',fontSize:10}}
+                      formatter={(v)=>[`${v}%`,'Throttle']} labelFormatter={v=>`${v}%`} />
+                    <Area type="monotone" dataKey="throttle" stroke="#00ff88" fill="url(#throtGrad)"
+                      strokeWidth={1.5} dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+                <div className="font-mono text-xs mb-1" style={{color:'#3d4f66',marginTop:4}}>BRAKE</div>
+                <div style={{display:'flex',gap:1,flexWrap:'wrap',height:18,alignItems:'center'}}>
+                  {carTelem.telemetry.filter((_,i)=>i%3===0).map((t,i)=>(
+                    <div key={i} style={{
+                      width:3, height: t.brake ? 16 : 6,
+                      background: t.brake ? '#E8002D' : 'rgba(255,255,255,0.06)',
+                      borderRadius:1, transition:'height 0.1s',
+                      boxShadow: t.brake ? '0 0 3px #E8002D' : 'none'
+                    }}/>
+                  ))}
+                </div>
+              </>
+            )}
+          </PanelBox>
+
+          {/* Gear + DRS */}
+          <PanelBox title={`GEAR & DRS — ${selected?.slice(0,3).toUpperCase() || ''}`}>
+            {telemLoading ? (
+              <span className="font-mono text-xs" style={{color:'#3d4f66'}}>LOADING…</span>
+            ) : !carTelem?.telemetry?.length ? (
+              <span className="font-mono text-xs" style={{color:'#3d4f66'}}>NO DATA</span>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={70}>
+                  <LineChart data={carTelem.telemetry} margin={{top:2,right:4,left:-20,bottom:0}}>
+                    <XAxis dataKey="dist" hide />
+                    <YAxis tick={{fontFamily:'monospace',fontSize:7,fill:'#3d4f66'}} domain={[1,8]} width={20} ticks={[1,2,3,4,5,6,7,8]}/>
+                    <Tooltip contentStyle={{background:'#0d1018',border:'1px solid #1e2535',
+                      fontFamily:'monospace',fontSize:10}}
+                      formatter={(v)=>[`G${v}`,'Gear']} labelFormatter={v=>`${v}%`} />
+                    <Line type="stepAfter" dataKey="gear" stroke="#FF8000" strokeWidth={1.5}
+                      dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+                {/* DRS activated zones */}
+                <div className="font-mono text-xs mb-1" style={{color:'#3d4f66',marginTop:2}}>DRS ZONES</div>
+                <div style={{display:'flex',gap:1,alignItems:'center',height:14}}>
+                  {carTelem.telemetry.filter((_,i)=>i%3===0).map((t,i)=>(
+                    <div key={i} style={{
+                      width:3,height:14,
+                      background: t.drs >= 10 ? '#00CFFF' : 'rgba(255,255,255,0.05)',
+                      borderRadius:1,
+                      boxShadow: t.drs >= 10 ? '0 0 3px #00CFFF' : 'none'
+                    }}/>
+                  ))}
+                </div>
+                <div style={{display:'flex',gap:6,marginTop:6}}>
+                  <div style={{display:'flex',alignItems:'center',gap:4}}>
+                    <div style={{width:8,height:8,background:'#00CFFF',borderRadius:1,boxShadow:'0 0 4px #00CFFF'}}/>
+                    <span className="font-mono text-xs" style={{color:'#3d4f66'}}>DRS OPEN</span>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:4}}>
+                    <div style={{width:8,height:8,background:'rgba(255,255,255,0.1)',borderRadius:1}}/>
+                    <span className="font-mono text-xs" style={{color:'#3d4f66'}}>CLOSED</span>
+                  </div>
+                </div>
+              </>
+            )}
           </PanelBox>
 
         </div>

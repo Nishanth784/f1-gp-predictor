@@ -658,6 +658,148 @@ async def ws_live(ws: WebSocket):
 
 
 # ---------------------------------------------------------------------------
+# /car-telemetry  — FastF1 telemetry for a driver's fastest lap (historical)
+# ---------------------------------------------------------------------------
+
+@app.get("/car-telemetry/{year}/{gp}/{driver}")
+async def get_car_telemetry(
+    request: Request,
+    year: int,
+    gp: str,
+    driver: str,
+    session_type: str = Query("R"),
+) -> Dict[str, Any]:
+    """
+    Return throttle/brake/speed/gear/DRS/RPM traces for a driver's fastest lap.
+    Loads FastF1 with telemetry=True — slow on first call (~30s), cached after.
+    """
+    import fastf1
+    import pandas as pd
+
+    gp_name = _resolve_gp_name(year, gp)
+    st = _get_session_type(session_type)
+    cache_key = (year, gp_name.lower(), st, driver.upper(), "telem")
+
+    with _CACHE_LOCK:
+        entry = _PREDICTIONS_CACHE.get(str(cache_key))
+        if entry and (time.time() - entry.get("ts", 0)) < 3600:
+            return entry["data"]
+
+    try:
+        session = fastf1.get_session(year, gp_name, st)
+        session.load(laps=True, telemetry=True, weather=False, messages=False)
+
+        drv_laps = session.laps.pick_drivers(driver.upper())
+        if drv_laps.empty:
+            raise HTTPException(status_code=404, detail=f"No laps found for {driver}")
+
+        fastest = drv_laps.pick_fastest()
+        tel = fastest.get_telemetry()
+
+        # Normalise distance to 0-100%
+        max_dist = float(tel["Distance"].max()) if "Distance" in tel.columns and len(tel) > 0 else 1.0
+
+        rows = []
+        for _, row in tel.iterrows():
+            rows.append({
+                "dist":     round(float(row.get("Distance", 0)) / max_dist * 100, 2),
+                "speed":    int(row.get("Speed", 0)),
+                "throttle": int(row.get("Throttle", 0)),
+                "brake":    bool(row.get("Brake", False)),
+                "gear":     int(row.get("nGear", row.get("Gear", 0))),
+                "drs":      int(row.get("DRS", 0)),
+                "rpm":      int(row.get("RPM", 0)),
+            })
+
+        lap_time = None
+        try:
+            lt = fastest["LapTime"]
+            if not pd.isna(lt):
+                t = lt.total_seconds()
+                lap_time = f"{int(t//60)}:{t%60:06.3f}"
+        except Exception:
+            pass
+
+        result = {
+            "driver":       driver.upper(),
+            "gp":           gp_name,
+            "year":         year,
+            "session_type": st,
+            "lap_time":     lap_time,
+            "compound":     str(fastest.get("Compound", "")),
+            "telemetry":    rows,
+        }
+
+        with _CACHE_LOCK:
+            _PREDICTIONS_CACHE[str(cache_key)] = {"data": result, "ts": time.time()}
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# /live-car-data  — OpenF1 real-time car data (throttle/brake/speed/gear/DRS)
+# ---------------------------------------------------------------------------
+
+@app.get("/live-car-data/{driver_number}")
+async def get_live_car_data(
+    request: Request,
+    driver_number: int,
+) -> Dict[str, Any]:
+    """
+    Return recent car telemetry for a driver from OpenF1 (live sessions only).
+    Samples the last 200 data points (~1 lap worth).
+    """
+    import httpx
+
+    state = get_live_state()
+    session = state.get("session") or {}
+    sk = session.get("session_key")
+
+    if not sk:
+        raise HTTPException(status_code=503, detail="No active session")
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://api.openf1.org/v1/car_data",
+                params={"driver_number": driver_number, "session_key": sk},
+            )
+            r.raise_for_status()
+            data = r.json()
+
+        # Keep last 200 samples (roughly 1 lap)
+        data = data[-200:] if len(data) > 200 else data
+
+        rows = [{
+            "date":     row.get("date"),
+            "speed":    row.get("speed", 0),
+            "throttle": row.get("throttle", 0),
+            "brake":    row.get("brake", False),
+            "gear":     row.get("n_gear", 0),
+            "drs":      row.get("drs", 0),
+            "rpm":      row.get("rpm", 0),
+        } for row in data]
+
+        return {
+            "driver_number": driver_number,
+            "session_key":   sk,
+            "is_live":       state.get("is_live", False),
+            "samples":       len(rows),
+            "car_data":      rows,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
 # /live-status  — REST: is a session currently live?
 # ---------------------------------------------------------------------------
 

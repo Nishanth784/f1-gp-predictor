@@ -8,6 +8,50 @@ import ChaosDisplay from '../components/ChaosDisplay'
 import { getTeamColour } from '../components/TeamColours'
 import { sanitizeYear, sanitizeGP } from '../utils/sanitizeParams'
 
+// Practice fastest-lap leaderboard
+function PracticeLeaderboard({ drivers = [] }) {
+  if (!drivers.length) return (
+    <div className="flex items-center justify-center h-40">
+      <span className="font-mono text-xs" style={{ color: '#3d4f66' }}>AWAITING PRACTICE DATA</span>
+    </div>
+  )
+  const best = drivers[0]?.fastest_lap_ms ?? 1
+  return (
+    <div style={{ overflowY: 'auto', maxHeight: '100%' }}>
+      {drivers.map((d, i) => {
+        const colour = (window.__getTeamColour?.(d.team) || '#8899aa')
+        const gap = i === 0 ? '' : d.gap_ms != null ? `+${(d.gap_ms/1000).toFixed(3)}` : ''
+        const lapStr = d.fastest_lap_ms
+          ? (() => { const s=d.fastest_lap_ms/1000; const m=Math.floor(s/60); return `${m}:${(s%60).toFixed(3).padStart(6,'0')}`})()
+          : '--'
+        return (
+          <div key={d.driver} style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 12px',
+            borderBottom:'1px solid rgba(255,255,255,0.04)',
+            background: i===0 ? 'rgba(255,215,0,0.04)' : 'transparent' }}>
+            <span style={{ fontFamily:'monospace', fontSize:9, color: i<3 ? ['#FFD700','#C0C0C0','#CD7F32'][i] : '#3d4f66', width:20 }}>
+              P{i+1}
+            </span>
+            <div style={{ width:8, height:8, borderRadius:'50%', background: colour, flexShrink:0,
+              boxShadow:`0 0 6px ${colour}88` }} />
+            <span style={{ fontFamily:'monospace', fontSize:11, fontWeight:700, color:'#fff', width:30 }}>
+              {d.driver?.slice(0,3).toUpperCase()}
+            </span>
+            <div style={{ flex:1, height:4, background:'rgba(255,255,255,0.05)', borderRadius:2, overflow:'hidden' }}>
+              <div style={{ width:`${(d.fastest_lap_ms??0)/best*100}%`, height:'100%',
+                background: colour, borderRadius:2 }} />
+            </div>
+            <span style={{ fontFamily:'monospace', fontSize:10, color: i===0?'#FFD700':colour, width:62, textAlign:'right' }}>
+              {lapStr}
+            </span>
+            {gap && <span style={{ fontFamily:'monospace', fontSize:9, color:'#3d4f66', width:44, textAlign:'right' }}>{gap}</span>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8011'
 
 function PanelBox({ title, badge, children, style = {} }) {
@@ -105,6 +149,7 @@ export default function RaceControl() {
   const [events, setEvents] = useState([])
   const [gp, setGp]         = useState(safeParamGp)
   const [data, setData]     = useState(null)
+  const [liveSession, setLiveSession] = useState(null)  // for detecting practice sessions
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState(null)
 
@@ -145,6 +190,16 @@ export default function RaceControl() {
       .catch(e => { setError('Failed to load predictions'); setLoading(false) })
   }, [year, gp])
 
+  // Fetch live-status to know if we're in a practice session
+  useEffect(() => {
+    fetch(`${API_BASE}/live-status`).then(r=>r.json()).then(setLiveSession).catch(()=>{})
+    const id = setInterval(() => {
+      fetch(`${API_BASE}/live-status`).then(r=>r.json()).then(setLiveSession).catch(()=>{})
+    }, 30000)
+    return () => clearInterval(id)
+  }, [])
+
+  const isPractice = ['FP1','FP2','FP3','Practice'].includes(liveSession?.session_type?.toUpperCase?.() ?? '')
   const drivers  = data?.predictions || []
   const chaos    = data?.chaos_index ?? 0
   const scRate   = data?.sc_rate ?? 0
@@ -186,9 +241,20 @@ export default function RaceControl() {
         minHeight: 0 }}>
 
         {/* LEFT: Leaderboard */}
-        <PanelBox title="TIMING TOWER" badge={`${drivers.length} DRIVERS`}
+        <PanelBox title="PREDICTION TOWER" badge={isPractice ? (liveSession?.session_type || "PRACTICE") : `${drivers.length} DRIVERS`}
           style={{ gridRow: '1', gridColumn: '1' }}>
-          <LeaderBoard drivers={drivers} loading={loading} />
+          {isPractice
+            ? <PracticeLeaderboard drivers={
+                // derive from live leaderboard state if available
+                (liveSession?.leaderboard || []).map((d,i,arr) => ({
+                  driver: d.driver_code || d.name_acronym || d.Driver,
+                  team:   d.team || '',
+                  fastest_lap_ms: d.last_lap_ms ?? null,
+                  gap_ms: i===0 ? 0 : d.gap_to_leader_ms ?? null,
+                })).filter(d=>d.driver)
+              } />
+            : <LeaderBoard drivers={drivers} loading={loading} />
+          }
         </PanelBox>
 
         {/* CENTRE: Circuit map */}
