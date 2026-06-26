@@ -1,0 +1,60 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets / local config
+.env
+*.env
+backend/.env
+
+# Frontend (not needed in backend container)
+frontend/
+
+# FastF1 / practice caches (rebuilt at runtime, keep image slim)
+fastf1_cache/
+cache/
+
+# Training artifacts (not needed to serve predictions)
+F1-lap-time-prediction/
+retrain_model.py
+precompute_all_practice.py
+precompute_all_practice.bat
+main.py
+train_model.bat
+training_log.txt
+retrain_log.json
+
+# Dev / scripts
+dashboard.py
+streamlit_app.py
+realtime.py
+run_f1_app.bat
+start_backend.bat
+start_frontend.bat
+git_commit.bat
+git_push.bat
+
+# Tests
+tests/
+
+# Docs / misc
+*.md
+*.pdf
+.snapshots/
+
+# Git
+.git/
+.github/
+
+# OS
+.DS_Store
+Thumbs.db

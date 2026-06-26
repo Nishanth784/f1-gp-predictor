@@ -1,13 +1,14 @@
 services:
   - type: web
     name: f1-api
-    env: python
+    env: docker
     plan: free
     region: oregon
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
+      - key: ALLOWED_ORIGINS
+        value: https://f1-gp-predictor.netlify.app
+      - key: FASTF1_CACHE_DIR
+        value: /app/fastf1_cache
