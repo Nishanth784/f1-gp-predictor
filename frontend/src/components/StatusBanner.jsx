@@ -1,14 +1,13 @@
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
-import { Activity, Map, User, Sliders, ChevronRight, Timer, Radio, Wifi } from 'lucide-react'
+import { Activity, Map, User, ChevronRight, Timer, Radio, Wifi } from 'lucide-react'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8011'
 
 const NAV = [
   { label: 'RACE CONTROL', icon: Activity, path: 'race' },
-  { label: 'TELEMETRY',    icon: Map,      path: 'telemetry' },
+  { label: 'LAP DATA',     icon: Map,      path: 'telemetry' },
   { label: 'DRIVER INTEL', icon: User,     path: 'intel' },
-  { label: 'SCENARIO',     icon: Sliders,  path: 'scenario' },
   { label: 'TIMING',       icon: Timer,    path: 'timing' },
   { label: 'RC FEED',      icon: Radio,    path: 'radio' },
 ]

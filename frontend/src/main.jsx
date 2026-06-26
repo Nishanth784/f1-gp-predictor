@@ -6,7 +6,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import RaceControl from './pages/RaceControl'
 import TelemetryWall from './pages/TelemetryWall'
 import DriverIntel from './pages/DriverIntel'
-import ScenarioModeller from './pages/ScenarioModeller'
+
 import TimingTower from './pages/TimingTower'
 import RadioFeed from './pages/RadioFeed'
 import Results from './pages/Results'
@@ -27,7 +27,7 @@ const router = createBrowserRouter([
   { path: '/race/:year/:gp',          element: page(RaceControl,       'race control') },
   { path: '/telemetry/:year/:gp',     element: page(TelemetryWall,     'telemetry wall') },
   { path: '/intel/:year/:gp',         element: page(DriverIntel,       'driver intel') },
-  { path: '/scenario/:year/:gp',      element: page(ScenarioModeller,  'scenario modeller') },
+  { path: '/scenario/:year/:gp',      element: <Navigate to="/" replace /> },
   { path: '/timing/:year/:gp',        element: page(TimingTower,       'timing tower') },
   { path: '/radio/:year/:gp',         element: page(RadioFeed,         'RC feed') },
   { path: '/results/:year/:gp',       element: page(Results,           'results') },
