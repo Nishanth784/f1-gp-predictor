@@ -84,6 +84,27 @@ def _limit(rate: str):
 
 _winner_model_cache: Optional[Tuple[object, List[str]]] = None
 
+# In-memory result cache: key="year_gp" → (fetched_at_unix, WinnerProbabilitiesOutput)
+# Survives the lifetime of the process; wiped on cold start.
+_predictions_cache: Dict[str, Tuple[float, Any]] = {}
+_PREDICTIONS_TTL = 3600  # seconds — re-fetch from FastF1 after 1 hour
+
+
+def _predictions_cache_get(year: int, gp: str) -> Optional[Any]:
+    import time
+    key = f"{year}_{gp.lower()}"
+    if key in _predictions_cache:
+        ts, result = _predictions_cache[key]
+        if time.time() - ts < _PREDICTIONS_TTL:
+            return result
+        del _predictions_cache[key]
+    return None
+
+
+def _predictions_cache_set(year: int, gp: str, result: Any) -> None:
+    import time
+    _predictions_cache[f"{year}_{gp.lower()}"] = (time.time(), result)
+
 
 @app.on_event("startup")
 async def load_winner_model_on_startup():
@@ -96,6 +117,43 @@ async def load_winner_model_on_startup():
             print("Warning: No winner model found. Run main.py to train first.")
     except Exception as e:
         print(f"Error loading winner model: {e}")
+    # Kick off background pre-warm for the most recent completed race
+    asyncio.create_task(_prewarm_recent_race())
+
+
+async def _prewarm_recent_race():
+    """Pre-fetch FastF1 data for the most recent race so first user request is fast."""
+    import time
+    await asyncio.sleep(2)  # Let startup finish first
+    try:
+        from data_ingestion import get_event_schedule
+        import datetime
+        year = datetime.datetime.now().year
+        schedule = get_event_schedule(year)
+        if schedule is None or schedule.empty:
+            return
+        today = datetime.datetime.now()
+        past = schedule[pd.to_datetime(schedule.get("EventDate", schedule.iloc[:, 0])) < today]
+        if past.empty:
+            return
+        last = past.iloc[-1]
+        gp_name = str(last.get("EventName", last.get("OfficialEventName", "")))
+        if not gp_name:
+            return
+        # Check cache first
+        if _predictions_cache_get(year, gp_name) is not None:
+            print(f"[prewarm] Already cached: {year} {gp_name}")
+            return
+        print(f"[prewarm] Pre-warming: {year} {gp_name}")
+        t0 = time.time()
+        model, expected_features = _get_winner_model()
+        winner_data = get_winner_prediction_data(year, gp_name)
+        if not winner_data.empty:
+            result = _build_predictions(winner_data, year, gp_name, model, expected_features)
+            _predictions_cache_set(year, gp_name, result)
+            print(f"[prewarm] Done in {time.time()-t0:.1f}s — {gp_name}")
+    except Exception as e:
+        print(f"[prewarm] Skipped: {e}")
 
 
 def _get_winner_model() -> Tuple[object, List[str]]:
@@ -322,6 +380,10 @@ async def get_winner_probabilities(
     model, expected_features = _get_winner_model()
     gp_name = _resolve_gp_name(year, gp)
 
+    cached = _predictions_cache_get(year, gp_name)
+    if cached is not None:
+        return cached
+
     try:
         winner_data = get_winner_prediction_data(year, gp_name)
         if winner_data.empty:
@@ -331,7 +393,9 @@ async def get_winner_probabilities(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load race data: {e}")
 
-    return _build_predictions(winner_data, year, gp_name, model, expected_features)
+    result = _build_predictions(winner_data, year, gp_name, model, expected_features)
+    _predictions_cache_set(year, gp_name, result)
+    return result
 
 
 @app.post("/predict-winner", response_model=WinnerProbabilitiesOutput)
