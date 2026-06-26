@@ -112,6 +112,9 @@ class LiveTimingEngine:
         self._laps:      Dict[int, Dict] = {}   # latest lap per driver
         self._rc:        List[Dict]       = []  # all RC messages this session
 
+        self._radio:     List[Dict]       = []  # team radio clips this session
+        self._radio_seen: set             = set()  # dedupe by recording_url
+
         self._session_key: Optional[int] = None
         self._last_date:   Optional[str] = None  # ISO timestamp of last delta
 
@@ -185,6 +188,8 @@ class LiveTimingEngine:
             self._stints      = {}
             self._laps        = {}
             self._rc          = []
+            self._radio       = []
+            self._radio_seen  = set()
 
         # ── 3. Load drivers once per session ──────────────────────────────
         if not self._drivers:
@@ -210,6 +215,7 @@ class LiveTimingEngine:
         new_laps      = delta("laps")
         new_rc        = delta("race_control")
         new_weather   = _get("weather", {"session_key": sk})
+        new_radio     = delta("team_radio")
 
         # ── 6. Merge into accumulators ─────────────────────────────────────
         for row in new_pos:
@@ -240,6 +246,26 @@ class LiveTimingEngine:
         # Keep RC sorted newest-first, cap at 50
         self._rc.sort(key=lambda x: x.get("date",""), reverse=True)
         self._rc = self._rc[:50]
+
+        # Merge team radio — dedupe by recording_url
+        for clip in new_radio:
+            url = clip.get("recording_url", "")
+            if url and url not in self._radio_seen:
+                self._radio_seen.add(url)
+                dn  = clip.get("driver_number")
+                drv = self._drivers.get(dn, {})
+                self._radio.append({
+                    "date":          clip.get("date"),
+                    "driver_number": dn,
+                    "acronym":       drv.get("name_acronym", f"#{dn}"),
+                    "full_name":     drv.get("full_name", ""),
+                    "team":          drv.get("team_name", ""),
+                    "team_colour":   "#" + (drv.get("team_colour") or "888888"),
+                    "recording_url": url,
+                })
+        # Newest first, keep last 30
+        self._radio.sort(key=lambda x: x.get("date",""), reverse=True)
+        self._radio = self._radio[:30]
 
         # Latest weather snapshot
         weather = new_weather[-1] if new_weather else None
@@ -343,6 +369,7 @@ class LiveTimingEngine:
             "is_live":      is_live,
             "leaderboard":  leaderboard,
             "race_control": rc_out,
+            "team_radio":   self._radio[:30],
             "weather":      wx_out,
             "lap_count":    {"current": total_laps, "total": 0},
             "track_status": track_status,

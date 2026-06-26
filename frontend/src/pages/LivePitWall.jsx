@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Activity, Wifi, WifiOff, Radio, Cloud, Flag, AlertTriangle } from 'lucide-react'
+import { Activity, Wifi, WifiOff, Radio, Cloud, Flag, AlertTriangle, Play, Square } from 'lucide-react'
 
 const WS_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:8011')
   .replace(/^http/, 'ws')
@@ -144,6 +144,72 @@ function RcMessage({ msg }) {
   )
 }
 
+function RadioClip({ clip }) {
+  const [playing, setPlaying] = useState(false)
+  const audioRef = useRef(null)
+
+  const toggle = () => {
+    if (!clip.recording_url) return
+    if (!audioRef.current) {
+      audioRef.current = new Audio(clip.recording_url)
+      audioRef.current.onended = () => setPlaying(false)
+      audioRef.current.onerror = () => setPlaying(false)
+    }
+    if (playing) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+      setPlaying(false)
+    } else {
+      audioRef.current.play().catch(() => setPlaying(false))
+      setPlaying(true)
+    }
+  }
+
+  // cleanup on unmount
+  useEffect(() => () => { audioRef.current?.pause() }, [])
+
+  const col = clip.team_colour || '#888888'
+  const ts  = clip.date ? new Date(clip.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'
+
+  return (
+    <div style={{ padding: '7px 10px', borderBottom: '1px solid rgba(255,255,255,0.04)',
+      display: 'flex', gap: 8, alignItems: 'center',
+      background: playing ? 'rgba(0,255,136,0.04)' : 'transparent' }}>
+      {/* team stripe */}
+      <div style={{ width: 3, height: 32, background: col, borderRadius: 2, flexShrink: 0 }} />
+
+      {/* driver tag */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+          <span className="font-mono font-bold" style={{ fontSize: 11, color: '#fff' }}>
+            {clip.acronym}
+          </span>
+          <span className="font-mono" style={{ fontSize: 8, color: col, opacity: 0.8,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {(clip.team || '').toUpperCase()}
+          </span>
+        </div>
+        <div className="font-mono" style={{ fontSize: 9, color: '#3d4f66' }}>{ts}</div>
+      </div>
+
+      {/* play/stop button */}
+      <button
+        onClick={toggle}
+        style={{
+          width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
+          border: `1px solid ${playing ? '#00ff88' : '#1e2535'}`,
+          background: playing ? 'rgba(0,255,136,0.12)' : '#0d1018',
+          cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: playing ? '#00ff88' : '#3d4f66',
+          transition: 'all 0.15s',
+        }}
+      >
+        {playing ? <Square size={9} fill="currentColor" /> : <Play size={9} fill="currentColor" />}
+      </button>
+    </div>
+  )
+}
+
 function WeatherStrip({ wx }) {
   if (!wx) return null
   return (
@@ -215,9 +281,12 @@ export default function LivePitWall() {
     }
   }, [connect])
 
+  const [rightTab, setRightTab] = useState('rc')  // 'rc' | 'radio'
+
   const session      = state?.session
   const leaderboard  = state?.leaderboard   || []
   const rcMessages   = state?.race_control  || []
+  const radioClips   = state?.team_radio    || []
   const weather      = state?.weather
   const lapCount     = state?.lap_count     || {}
   const trackStatus  = state?.track_status  || 'AllClear'
@@ -310,25 +379,61 @@ export default function LivePitWall() {
           </div>
         </div>
 
-        {/* RIGHT: RC Messages */}
+        {/* RIGHT: Tabbed RC | Radio */}
         <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div style={{ padding: '5px 10px', borderBottom: '1px solid #1e2535',
-            background: '#0a0d14', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Flag size={9} style={{ color: '#3d4f66' }} />
-            <span className="font-mono" style={{ fontSize: 8, color: '#3d4f66' }}>
-              RACE CONTROL
-            </span>
-          </div>
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {rcMessages.length === 0 ? (
-              <div style={{ padding: 16, textAlign: 'center' }}>
-                <span className="font-mono" style={{ fontSize: 9, color: '#2a3545' }}>
-                  NO MESSAGES
+          {/* Tab bar */}
+          <div style={{ display: 'flex', borderBottom: '1px solid #1e2535',
+            background: '#0a0d14', flexShrink: 0 }}>
+            {[
+              { id: 'rc',    icon: <Flag size={9} />,   label: 'RACE CONTROL', count: rcMessages.length },
+              { id: 'radio', icon: <Radio size={9} />,  label: 'RADIO',        count: radioClips.length },
+            ].map(tab => (
+              <button key={tab.id} onClick={() => setRightTab(tab.id)}
+                style={{
+                  flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  gap: 4, padding: '6px 8px', cursor: 'pointer',
+                  borderBottom: rightTab === tab.id ? '2px solid #E8002D' : '2px solid transparent',
+                  background: rightTab === tab.id ? 'rgba(232,0,45,0.05)' : 'transparent',
+                  color: rightTab === tab.id ? '#c0cfe0' : '#3d4f66',
+                }}>
+                <span style={{ color: 'inherit' }}>{tab.icon}</span>
+                <span className="font-mono" style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1 }}>
+                  {tab.label}
                 </span>
-              </div>
-            ) : rcMessages.map((msg, i) => (
-              <RcMessage key={i} msg={msg} />
+                {tab.count > 0 && (
+                  <span className="font-mono" style={{ fontSize: 7,
+                    background: rightTab === tab.id ? 'rgba(232,0,45,0.2)' : '#1e2535',
+                    color: rightTab === tab.id ? '#E8002D' : '#3d4f66',
+                    padding: '1px 4px', borderRadius: 2 }}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
             ))}
+          </div>
+
+          {/* Tab content */}
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {rightTab === 'rc' ? (
+              rcMessages.length === 0 ? (
+                <div style={{ padding: 16, textAlign: 'center' }}>
+                  <span className="font-mono" style={{ fontSize: 9, color: '#2a3545' }}>NO MESSAGES</span>
+                </div>
+              ) : rcMessages.map((msg, i) => <RcMessage key={i} msg={msg} />)
+            ) : (
+              radioClips.length === 0 ? (
+                <div style={{ padding: 16, textAlign: 'center', display: 'flex',
+                  flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+                  <Radio size={16} style={{ color: '#1e2535' }} />
+                  <span className="font-mono" style={{ fontSize: 9, color: '#2a3545' }}>
+                    NO RADIO CLIPS
+                  </span>
+                  <span className="font-mono" style={{ fontSize: 8, color: '#1e2535' }}>
+                    CLIPS APPEAR DURING SESSIONS
+                  </span>
+                </div>
+              ) : radioClips.map((clip, i) => <RadioClip key={clip.recording_url || i} clip={clip} />)
+            )}
           </div>
         </div>
       </div>
