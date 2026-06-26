@@ -89,6 +89,61 @@ _winner_model_cache: Optional[Tuple[object, List[str]]] = None
 _predictions_cache: Dict[str, Tuple[float, Any]] = {}
 _PREDICTIONS_TTL = 3600  # seconds — re-fetch from FastF1 after 1 hour
 
+# ── 2026 corner telemetry adjustment layer ────────────────────────────────
+_CORNER_PROFILES: Dict[str, Any] = {}
+
+def _load_corner_profiles() -> None:
+    global _CORNER_PROFILES
+    import json as _json
+    p = Path(__file__).parent.parent / "models" / "corner_features_2026.json"
+    if p.exists():
+        try:
+            data = _json.loads(p.read_text())
+            _CORNER_PROFILES = data.get("driver_profiles", {})
+            print(f"[corner] loaded {len(_CORNER_PROFILES)} driver profiles from 2026 telemetry cache")
+        except Exception as e:
+            print(f"[corner] failed to load corner cache: {e}")
+    else:
+        print("[corner] no corner_features_2026.json found — skipping adjustment")
+
+def _apply_corner_adjustment(predictions: list) -> list:
+    """Nudge win probabilities ±12% using 2026 corner performance data."""
+    if not _CORNER_PROFILES:
+        return predictions
+    import numpy as np
+    WEIGHT = 0.12
+
+    def corner_score(drv: str) -> float:
+        p = _CORNER_PROFILES.get(drv[:3].upper(), {})
+        if not p:
+            return 1.0
+        # Works with both v2 (OpenF1 raw) and v3 (FastF1 sector) feature sets
+        feats_v3 = ["sector1_pace","sector2_pace","sector3_pace","race_pace"]
+        feats_v2 = ["slow_corner_exit_speed","high_speed_corner_min_speed",
+                    "traction_zone_accel","braking_efficiency"]
+        keys = feats_v3 if "sector1_pace" in p else feats_v2
+        vals = [p.get(f, 1.0) for f in keys]
+        return float(np.mean(vals))
+
+    adjusted = []
+    for pred in predictions:
+        drv      = (pred.get("driver") or pred.get("Driver") or "")[:3].upper()
+        cs       = corner_score(drv)
+        adj      = 1.0 + WEIGHT * (cs - 1.0)
+        base     = pred.get("win_probability") or pred.get("likely_probability") or 0
+        new_prob = max(0.001, base * adj)
+        adjusted.append({**pred, "win_probability": new_prob,
+                          "likely_probability": new_prob,
+                          "corner_score": round(cs, 4)})
+
+    total = sum(p["win_probability"] for p in adjusted) or 1.0
+    for p in adjusted:
+        p["win_probability"]    = p["win_probability"]    / total
+        p["likely_probability"] = p["likely_probability"] / total
+
+    return sorted(adjusted, key=lambda x: x["win_probability"], reverse=True)
+
+
 
 def _predictions_cache_get(year: int, gp: str) -> Optional[Any]:
     import time
@@ -151,6 +206,7 @@ _live_mgr = _LiveConnectionManager()
 
 @app.on_event("startup")
 async def load_winner_model_on_startup():
+    _load_corner_profiles()
     global _winner_model_cache
     try:
         _winner_model_cache = load_best_winner_model()
